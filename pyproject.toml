@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sec-edgar-filings-to-pgvector"
+version = "0.1.0"
+description = "Kafka consumer that extracts SEC EDGAR filings from local disk, embeds them, and loads into pgvector."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "beautifulsoup4>=4.12",
+    "confluent-kafka>=2.6",
+    "lxml>=5.3",
+    "pgvector>=0.3",
+    "psycopg[binary]>=3.2",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.6",
+    "sentence-transformers>=3.3",
+    "structlog>=24.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+]
+
+[project.scripts]
+edgar-etl = "edgar_etl.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/edgar_etl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

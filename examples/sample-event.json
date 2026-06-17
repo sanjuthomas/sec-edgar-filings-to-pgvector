@@ -1,0 +1,12 @@
+{
+  "event_type": "filing.downloaded",
+  "schema_version": 1,
+  "ticker": "AEE",
+  "company_name": "AMEREN CORP",
+  "filing_date": "2026-05-14",
+  "form": "8-K",
+  "accession_number": "0001104659-26-063184",
+  "local_path": "/Volumes/Transcend/edgar/AEE/000110465926063184/tm2614913d1_8k.htm",
+  "document_url": "https://www.sec.gov/Archives/edgar/data/1104659/000110465926063184/tm2614913d1_8k.htm",
+  "downloaded_at": "2026-06-16T17:28:23.652799Z"
+}
