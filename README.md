@@ -4,22 +4,54 @@ Transform and load SEC EDGAR filings into PostgreSQL with [pgvector](https://git
 
 This service listens to Kafka for `filing.downloaded` events, reads filings from the **local filesystem** (it does not download from SEC), extracts text from inline XBRL HTML, generates embeddings, and stores them in pgvector.
 
-## Architecture
+## Data flow
 
+This service consumes events produced by [sec-edgar-filings](https://github.com/sanjuthomas/sec-edgar-filings)
+after filings are downloaded to local disk. It does not call SEC EDGAR directly.
+
+### Ingest (Kafka → pgvector)
+
+```mermaid
+sequenceDiagram
+    participant Kafka as Kafka (filings)
+    participant ETL as edgar-etl consume
+    participant Disk as Local disk
+    participant Model as sentence-transformers
+    participant PG as PostgreSQL + pgvector
+
+    Kafka->>ETL: filing.downloaded event (JSON)
+    Note over ETL: ticker, form, accession_number, local_path, ...
+
+    ETL->>PG: accession already processed?
+    alt already in filings
+        PG-->>ETL: skip
+        ETL->>Kafka: commit offset
+    else new accession
+        ETL->>Disk: read local_path (.htm)
+        Disk-->>ETL: iXBRL HTML
+        ETL->>ETL: extract text, chunk
+        ETL->>Model: embed chunks (BAAI/bge-small-en-v1.5)
+        Model-->>ETL: vectors (384-dim)
+        ETL->>PG: upsert filings + filing_chunks
+        ETL->>Kafka: commit offset
+    end
 ```
-Kafka topic (filings)
-       │
-       ▼
-  edgar-etl consume
-       │
-       ├── read local_path (.htm on disk)
-       ├── extract text (iXBRL HTML → plain text)
-       ├── chunk text
-       ├── embed (sentence-transformers)
-       └── load → PostgreSQL + pgvector
 
-Query path:
-  edgar-etl search "your question" → embed question → nearest chunks
+### Query (semantic search)
+
+```mermaid
+sequenceDiagram
+    participant User as User / CLI
+    participant Search as edgar-etl search
+    participant Model as sentence-transformers
+    participant PG as PostgreSQL + pgvector
+
+    User->>Search: question + optional filters (ticker, form, top-k)
+    Search->>Model: embed question
+    Model-->>Search: query vector
+    Search->>PG: nearest-neighbor search (cosine distance)
+    PG-->>Search: top-K filing chunks + metadata
+    Search-->>User: matching passages
 ```
 
 ## What this project does / does not do
