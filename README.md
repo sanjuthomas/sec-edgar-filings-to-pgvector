@@ -2,7 +2,7 @@
 
 Transform and load SEC EDGAR filings into PostgreSQL with [pgvector](https://github.com/pgvector/pgvector) for semantic search.
 
-This service listens to Kafka for `filing.downloaded` events, reads filings from the **local filesystem** (it does not download from SEC), extracts text from inline XBRL HTML, generates embeddings, and stores them in pgvector.
+This service listens to Kafka for `filing.downloaded` events, looks up filing metadata in MongoDB, then **reads the actual `.htm` files from the local filesystem** at `/Volumes/Transcend/edgar` (it does not download from SEC). It extracts text from inline XBRL HTML, generates embeddings, and stores them in pgvector.
 
 ## Data flow
 
@@ -15,12 +15,15 @@ after filings are downloaded to local disk. It does not call SEC EDGAR directly.
 sequenceDiagram
     participant Kafka as Kafka (filings)
     participant ETL as edgar-etl consume
-    participant Disk as Local disk
+    participant Mongo as MongoDB (filing_metadata)
+    participant Disk as /Volumes/Transcend/edgar
     participant Model as sentence-transformers
-    participant PG as PostgreSQL + pgvector
+    participant PG as PostgreSQL (pgvector)
 
     Kafka->>ETL: filing.downloaded event (JSON)
-    Note over ETL: ticker, form, accession_number, local_path, ...
+    ETL->>Mongo: lookup by accession_number
+    Mongo-->>ETL: local_path, ticker, form, ...
+    Note over ETL: allowed form (10-K / 10-Q)?
 
     ETL->>PG: accession already processed?
     alt already in filings
@@ -58,54 +61,109 @@ sequenceDiagram
 
 | In scope | Out of scope |
 |----------|--------------|
-| Consume Kafka events | Download filings from SEC EDGAR |
-| Read files from `local_path` | LLM-generated answers (RAG chat) |
-| Extract, chunk, embed, load | SEC rate limiting / User-Agent handling |
+| Read `.htm` files from `/Volumes/Transcend/edgar` | Download filings from SEC EDGAR |
+| Consume Kafka events (read-only) | Run or manage Kafka |
+| Read filing metadata from MongoDB (read-only) | Write to MongoDB |
+| Extract, chunk, embed, load into pgvector | LLM-generated answers (RAG chat) |
+| Run pgvector + ETL consumer in Docker | SEC rate limiting / User-Agent handling |
+
+**MongoDB and Kafka live in [sec-edgar-filings](https://github.com/sanjuthomas/sec-edgar-filings)** — that project downloads filings, writes metadata to MongoDB, and publishes Kafka events. This project only connects to those services as a downstream consumer.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph producer ["sec-edgar-filings (producer)"]
+        DL[Downloader / API]
+        Mongo[(MongoDB)]
+        Kafka[[Kafka]]
+        Disk[(/Volumes/Transcend/edgar)]
+        DL --> Mongo
+        DL --> Disk
+        DL --> Kafka
+    end
+
+    subgraph consumer ["sec-edgar-filings-to-pgvector (this repo)"]
+        ETL[edgar-etl]
+        PG[(pgvector)]
+        ETL --> PG
+    end
+
+    Kafka -->|filing.downloaded| ETL
+    Mongo -->|filing_metadata lookup| ETL
+    Disk -->|read .htm| ETL
+```
+
+Both stacks join the same Docker network (`sec-edgar-filings_default` by default) so `edgar-etl` can reach `mongo` and `kafka` by service name.
 
 ## Prerequisites
 
-- **Python 3.11+**
-- **Docker** (for PostgreSQL + pgvector)
-- **Kafka** (only for `consume` mode)
-- Local EDGAR filing files (e.g. `/Volumes/Transcend/edgar/...`)
+- **Docker** with Compose v2
+- **[sec-edgar-filings](https://github.com/sanjuthomas/sec-edgar-filings)** running (`mongo`, `kafka`, and downloaded filings)
+- External drive mounted at `/Volumes/Transcend/edgar` (shared with sec-edgar-filings)
 
-### PostgreSQL + pgvector (Docker)
+### Quick start
 
-Data is stored on the external drive at `/Volumes/Transcend/pgvector-data`.
+**1. Start the producer stack** (MongoDB, Kafka, downloader):
 
 ```bash
-# Ensure the data directory exists (first time only)
-mkdir -p /Volumes/Transcend/pgvector-data
-
-# Start pgvector
+git clone https://github.com/sanjuthomas/sec-edgar-filings.git
+cd sec-edgar-filings
+cp .env.example .env   # set SEC_USER_AGENT
 docker compose up -d
+docker compose --profile jobs run --rm download-sp500   # optional: fetch filings
+```
 
-# Wait until healthy
+**2. Start this consumer stack** (pgvector + ETL):
+
+```bash
+git clone https://github.com/sanjuthomas/sec-edgar-filings-to-pgvector.git
+cd sec-edgar-filings-to-pgvector
+mkdir -p /Volumes/Transcend/pgvector-data
+cp .env.example .env
+docker compose up -d --build
+docker compose run --rm edgar-etl edgar-etl init-db   # first time only
 docker compose ps
 ```
 
-The `edgar` database is created automatically. Initialize tables and the pgvector extension:
+**3. Verify**
 
 ```bash
-edgar-etl init-db
+docker compose logs -f edgar-etl    # should connect to kafka:9092 and mongo:27017
 ```
 
-Stop / restart:
+### What runs where
 
-```bash
-docker compose down          # stop container (data persists on external drive)
-docker compose up -d         # start again
-```
+| Service | Project | Container | Purpose |
+|---------|---------|-----------|---------|
+| MongoDB | sec-edgar-filings | `mongo` | Filing metadata (producer writes, ETL reads) |
+| Kafka | sec-edgar-filings | `kafka` | `filing.downloaded` events (producer publishes, ETL consumes) |
+| pgvector | **this repo** | `edgar-pgvector` | Vector store for embeddings |
+| ETL consumer | **this repo** | `edgar-etl` | Kafka → MongoDB → embed → pgvector |
 
-**Connection settings:**
+**Host access to pgvector** (for `psql`, TablePlus, etc.):
 
 | Field | Value |
 |-------|-------|
 | Host | `localhost` |
-| Port | `5433` (host) → `5432` (container); avoids conflict if another Postgres uses 5432 |
+| Port | `5433` (host) → `5432` (container) |
 | User | `postgres` |
 | Password | `postgres` |
 | Database | `edgar` |
+
+### Local filing storage (`/Volumes/Transcend/edgar`)
+
+**Filing content always comes from the local filesystem**, not from MongoDB or Kafka. Those services only provide metadata and processing triggers:
+
+1. **Kafka** — notifies the ETL that a new filing is ready
+2. **MongoDB** — provides `local_path` and metadata (ticker, form, etc.)
+3. **Local disk** — the ETL opens and reads the `.htm` file at `local_path`
+
+Files are downloaded to `/Volumes/Transcend/edgar` by [sec-edgar-filings](https://github.com/sanjuthomas/sec-edgar-filings). This project mounts that same directory read-only into the `edgar-etl` container at the **identical path**, so `local_path` values like `/Volumes/Transcend/edgar/AAPL/.../filing.htm` work inside Docker without translation.
+
+On macOS, ensure Docker Desktop has file sharing enabled for `/Volumes`.
+
+Paths must stay under `EDGAR_DATA_DIR` (default: `/Volumes/Transcend/edgar`).
 
 ### Postgres clients (optional)
 
@@ -118,7 +176,9 @@ pgvector runs inside Postgres — any Postgres client works:
 | [Postico 2](https://eggerapps.at/postico2/) | Mac App Store |
 | [DBeaver](https://dbeaver.io/) | `brew install --cask dbeaver-community` |
 
-## Installation
+## Installation (local dev, optional)
+
+For offline commands (`process-file`, `search`, tests) without running the consumer in Docker:
 
 ```bash
 git clone <repo-url> sec-edgar-filings-to-pgvector
@@ -129,16 +189,13 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 
 cp .env.example .env
-# Edit .env if needed (defaults match docker-compose.yml)
+# Override for host-side dev (sec-edgar-filings still provides mongo/kafka):
+#   DATABASE_URL=postgresql://postgres:postgres@localhost:5433/edgar
+#   MONGO_URI=mongodb://localhost:27017
+#   KAFKA_BOOTSTRAP_SERVERS=localhost:9092
 
-# Start PostgreSQL + pgvector (see Prerequisites)
-docker compose up -d
-```
-
-Initialize database tables:
-
-```bash
-edgar-etl init-db
+docker compose up -d pgvector
+docker compose run --rm edgar-etl edgar-etl init-db
 ```
 
 ## Configuration
@@ -146,9 +203,20 @@ edgar-etl init-db
 Copy `.env.example` to `.env`:
 
 ```env
+# Network created by sec-edgar-filings docker compose
+SEC_EDGAR_DOCKER_NETWORK=sec-edgar-filings_default
+
 DATABASE_URL=postgresql://postgres:postgres@localhost:5433/edgar
 
-KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+EDGAR_DATA_DIR=/Volumes/Transcend/edgar
+ALLOWED_FORMS=10-K,10-Q,10-K/A,10-Q/A
+
+# Read-only — services run in sec-edgar-filings
+MONGO_URI=mongodb://mongo:27017
+MONGO_DB=sec_edgar_filings
+MONGO_FILING_METADATA_COLLECTION=filing_metadata
+
+KAFKA_BOOTSTRAP_SERVERS=kafka:9092
 KAFKA_TOPIC=filings
 KAFKA_GROUP_ID=edgar-etl
 KAFKA_AUTO_OFFSET_RESET=earliest
@@ -164,8 +232,16 @@ LOG_LEVEL=INFO
 
 | Variable | Description |
 |----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `KAFKA_TOPIC` | Topic to consume (e.g. `filings`) |
+| `SEC_EDGAR_DOCKER_NETWORK` | Docker network from sec-edgar-filings compose (default: `sec-edgar-filings_default`) |
+| `DATABASE_URL` | PostgreSQL connection string (this project's pgvector) |
+| `EDGAR_DATA_DIR` | Root directory for `.htm` filing files on disk (default: `/Volumes/Transcend/edgar`) |
+| `EDGAR_HOST_PATH` | Host bind-mount path for Docker (Compose only; defaults to `EDGAR_DATA_DIR`) |
+| `ALLOWED_FORMS` | Comma-separated forms to process (others are skipped) |
+| `MONGO_URI` | MongoDB connection — **read-only**; service runs in sec-edgar-filings |
+| `MONGO_DB` | MongoDB database name |
+| `MONGO_FILING_METADATA_COLLECTION` | Collection with filing paths and metadata |
+| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker — **read-only consumer**; service runs in sec-edgar-filings |
+| `KAFKA_TOPIC` | Topic to consume (default in sec-edgar-filings: `filings`) |
 | `KAFKA_GROUP_ID` | Consumer group for offset tracking |
 | `KAFKA_AUTO_OFFSET_RESET` | `earliest` = start from offset 0 for new groups |
 | `EMBEDDING_MODEL` | Hugging Face model (384 dimensions) |
@@ -173,7 +249,15 @@ LOG_LEVEL=INFO
 
 ## CLI commands
 
-All commands are run via `edgar-etl`:
+All commands are run via `edgar-etl`. In Docker:
+
+```bash
+docker compose run --rm edgar-etl edgar-etl init-db
+docker compose up -d edgar-etl          # Kafka consumer (default CMD)
+docker compose run --rm edgar-etl edgar-etl search "revenue growth" --top-k 5
+```
+
+On the host (local dev):
 
 ```bash
 edgar-etl init-db                              # Create tables + indexes
@@ -296,13 +380,15 @@ edgar-etl search "executive compensation approval"
 ```
 sec-edgar-filings-to-pgvector/
 ├── pyproject.toml
-├── docker-compose.yml         # pgvector on Docker (data: /Volumes/Transcend/pgvector-data)
+├── Dockerfile                 # ETL consumer image
+├── docker-compose.yml         # pgvector + edgar-etl (joins sec-edgar-filings network)
 ├── .env.example
 ├── sql/001_init.sql           # Database schema
 ├── examples/sample-event.json
 ├── src/edgar_etl/
 │   ├── cli.py                 # CLI entry point
-│   ├── consumer.py            # Kafka consumer
+│   ├── consumer.py            # Kafka consumer (+ MongoDB enrichment)
+│   ├── mongo.py               # filing_metadata lookup
 │   ├── extract.py             # iXBRL HTML extraction + chunking
 │   ├── embed.py               # sentence-transformers
 │   ├── store.py               # pgvector upsert
@@ -319,6 +405,7 @@ sec-edgar-filings-to-pgvector/
 | HTML parsing | BeautifulSoup + lxml |
 | Embeddings | sentence-transformers (`BAAI/bge-small-en-v1.5`) |
 | Database | psycopg + pgvector |
+| MongoDB | pymongo |
 | Config | pydantic-settings |
 
 ## Tests
@@ -333,9 +420,11 @@ Extraction tests use the sample 8-K at `/Volumes/Transcend/edgar/AEE/...` if the
 
 | Problem | Fix |
 |---------|-----|
-| `connection refused` on `psql` | Run `docker compose up -d` and check `docker compose ps` |
+| `network sec-edgar-filings_default not found` | Start [sec-edgar-filings](https://github.com/sanjuthomas/sec-edgar-filings) first: `docker compose up -d` |
+| ETL can't reach Kafka/MongoDB | Confirm sec-edgar-filings is running; check `SEC_EDGAR_DOCKER_NETWORK` matches `docker network ls` |
+| `connection refused` on `psql` | Run `docker compose up -d` here and check `docker compose ps` |
 | Container won't start (permissions) | Ensure `/Volumes/Transcend/pgvector-data` exists and is writable |
 | Port 5433 already in use | Stop other Postgres instances or change the host port in `docker-compose.yml` |
-| `filing not found` | External drive unmounted or wrong `local_path` in Kafka event |
+| `filing not found` | External drive unmounted; path outside `EDGAR_DATA_DIR`; or Docker can't access `/Volumes` (enable in Docker Desktop → Settings → Resources → File sharing) |
 | Poor search results | Use the same `EMBEDDING_MODEL` for load and search |
 | Reprocess a filing | `edgar-etl process-event --json ... --force` |

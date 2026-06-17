@@ -5,6 +5,7 @@ import structlog
 from confluent_kafka import Consumer, KafkaError, KafkaException
 
 from edgar_etl.config import Settings
+from edgar_etl.mongo import MongoFilingStore, enrich_event_from_mongo
 from edgar_etl.pipeline import configure_logging, parse_event, process_filing_event
 from edgar_etl.store import FilingStore
 
@@ -33,6 +34,7 @@ def run_consumer(settings: Settings | None = None) -> None:
     )
     consumer.subscribe([settings.kafka_topic])
     store = FilingStore(settings.database_url)
+    mongo_store = MongoFilingStore(settings) if settings.mongo_uri else None
 
     signal.signal(signal.SIGINT, _shutdown_handler)
     signal.signal(signal.SIGTERM, _shutdown_handler)
@@ -56,6 +58,8 @@ def run_consumer(settings: Settings | None = None) -> None:
 
             try:
                 event = parse_event(message.value())
+                if mongo_store is not None:
+                    event = enrich_event_from_mongo(event, mongo_store)
                 process_filing_event(event, settings, store=store)
                 consumer.commit(message=message, asynchronous=False)
             except Exception:
@@ -67,6 +71,8 @@ def run_consumer(settings: Settings | None = None) -> None:
                 )
     finally:
         consumer.close()
+        if mongo_store is not None:
+            mongo_store.close()
         logger.info("kafka consumer stopped")
 
 

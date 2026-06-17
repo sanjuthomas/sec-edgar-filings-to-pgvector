@@ -1,3 +1,13 @@
+# Consumer stack for sec-edgar-filings.
+#
+# This compose file runs ONLY pgvector and the edgar-etl consumer.
+# MongoDB and Kafka are owned by sec-edgar-filings:
+#   https://github.com/sanjuthomas/sec-edgar-filings
+#
+# Start the producer stack first, then this one:
+#   cd sec-edgar-filings && docker compose up -d
+#   cd sec-edgar-filings-to-pgvector && docker compose up -d --build
+
 services:
   pgvector:
     image: pgvector/pgvector:pg17
@@ -11,8 +21,40 @@ services:
     volumes:
       - /Volumes/Transcend/pgvector-data:/var/lib/postgresql/data
     restart: unless-stopped
+    networks:
+      - sec-edgar
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d edgar"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+  edgar-etl:
+    build: .
+    container_name: edgar-etl
+    depends_on:
+      pgvector:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@pgvector:5432/edgar
+      EDGAR_DATA_DIR: ${EDGAR_HOST_PATH:-/Volumes/Transcend/edgar}
+      ALLOWED_FORMS: 10-K,10-Q,10-K/A,10-Q/A
+      # Read-only clients — MongoDB/Kafka run in sec-edgar-filings compose.
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DB: sec_edgar_filings
+      MONGO_FILING_METADATA_COLLECTION: filing_metadata
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: filings
+      KAFKA_GROUP_ID: edgar-etl
+      KAFKA_AUTO_OFFSET_RESET: earliest
+    volumes:
+      # Filing .htm content is read from this host path (same as sec-edgar-filings).
+      - ${EDGAR_HOST_PATH:-/Volumes/Transcend/edgar}:${EDGAR_HOST_PATH:-/Volumes/Transcend/edgar}:ro
+    restart: unless-stopped
+    networks:
+      - sec-edgar
+
+networks:
+  sec-edgar:
+    external: true
+    name: ${SEC_EDGAR_DOCKER_NETWORK:-sec-edgar-filings_default}

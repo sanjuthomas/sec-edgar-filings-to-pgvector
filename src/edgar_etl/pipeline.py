@@ -5,7 +5,12 @@ import structlog
 
 from edgar_etl.config import Settings
 from edgar_etl.embed import embed_texts
-from edgar_etl.extract import chunk_text, extract_text_from_html, read_filing_html
+from edgar_etl.extract import (
+    chunk_text,
+    extract_text_from_html,
+    read_filing_html,
+    resolve_filing_path,
+)
 from edgar_etl.models import FilingDownloadedEvent
 from edgar_etl.store import FilingStore
 
@@ -52,18 +57,30 @@ def process_filing_event(
         )
         return 0
 
+    allowed_forms = {form.upper() for form in settings.allowed_forms}
+    if event.form.upper() not in allowed_forms:
+        logger.info(
+            "skipping unsupported form",
+            accession_number=event.accession_number,
+            form=event.form,
+            allowed_forms=sorted(allowed_forms),
+        )
+        return 0
+
+    filing_path = resolve_filing_path(event.local_path, settings.edgar_data_dir)
+
     logger.info(
         "processing filing",
         accession_number=event.accession_number,
-        local_path=event.local_path,
+        local_path=str(filing_path),
         form=event.form,
         ticker=event.ticker,
     )
 
-    html_content = read_filing_html(event.local_path)
+    html_content = read_filing_html(filing_path)
     text = extract_text_from_html(html_content)
     if not text.strip():
-        raise ValueError(f"no extractable text in {event.local_path}")
+        raise ValueError(f"no extractable text in {filing_path}")
 
     chunks = chunk_text(
         text,

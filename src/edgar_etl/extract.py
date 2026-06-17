@@ -18,8 +18,18 @@ MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
 HIDDEN_STYLE_RE = re.compile(r"display\s*:\s*none", re.IGNORECASE)
 
 
-def read_filing_html(local_path: str | Path) -> str:
-    path = Path(local_path)
+def resolve_filing_path(local_path: str | Path, base_dir: str | Path) -> Path:
+    path = Path(local_path).resolve()
+    base = Path(base_dir).resolve()
+    if not path.is_relative_to(base):
+        raise ValueError(f"filing path {path} is outside EDGAR_DATA_DIR {base}")
+    if not path.is_file():
+        raise FileNotFoundError(f"filing not found: {path}")
+    return path
+
+
+def read_filing_html(local_path: str | Path, *, base_dir: str | Path | None = None) -> str:
+    path = resolve_filing_path(local_path, base_dir) if base_dir else Path(local_path)
     if not path.is_file():
         raise FileNotFoundError(f"filing not found: {path}")
     return path.read_text(encoding="utf-8", errors="replace")
