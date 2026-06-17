@@ -65,28 +65,47 @@ sequenceDiagram
 ## Prerequisites
 
 - **Python 3.11+**
-- **PostgreSQL** with the **pgvector** extension
+- **Docker** (for PostgreSQL + pgvector)
 - **Kafka** (only for `consume` mode)
 - Local EDGAR filing files (e.g. `/Volumes/Transcend/edgar/...`)
 
-### PostgreSQL + pgvector on Mac (Homebrew)
+### PostgreSQL + pgvector (Docker)
+
+Data is stored on the external drive at `/Volumes/Transcend/pgvector-data`.
 
 ```bash
-brew install postgresql@17 pgvector
+# Ensure the data directory exists (first time only)
+mkdir -p /Volumes/Transcend/pgvector-data
 
-# Start Postgres (use 5433 if Docker already uses 5432)
-/opt/homebrew/opt/postgresql@17/bin/pg_ctl \
-  -D /opt/homebrew/var/postgresql@17 \
-  -o "-p 5433" \
-  start
+# Start pgvector
+docker compose up -d
+
+# Wait until healthy
+docker compose ps
 ```
 
-Create the database:
+The `edgar` database is created automatically. Initialize tables and the pgvector extension:
 
 ```bash
-psql -h localhost -p 5433 -U $(whoami) -d postgres -c "CREATE DATABASE edgar;"
-psql -h localhost -p 5433 -U $(whoami) -d edgar -c "CREATE EXTENSION vector;"
+edgar-etl init-db
 ```
+
+Stop / restart:
+
+```bash
+docker compose down          # stop container (data persists on external drive)
+docker compose up -d         # start again
+```
+
+**Connection settings:**
+
+| Field | Value |
+|-------|-------|
+| Host | `localhost` |
+| Port | `5433` (host) → `5432` (container); avoids conflict if another Postgres uses 5432 |
+| User | `postgres` |
+| Password | `postgres` |
+| Database | `edgar` |
 
 ### Postgres clients (optional)
 
@@ -94,20 +113,10 @@ pgvector runs inside Postgres — any Postgres client works:
 
 | Tool | Install |
 |------|---------|
-| `psql` (CLI) | Included with Homebrew Postgres |
+| `psql` (CLI) | `brew install libpq` or `docker compose exec pgvector psql -U postgres -d edgar` |
 | [TablePlus](https://tableplus.com/) | `brew install --cask tableplus` |
 | [Postico 2](https://eggerapps.at/postico2/) | Mac App Store |
 | [DBeaver](https://dbeaver.io/) | `brew install --cask dbeaver-community` |
-
-**Connection settings:**
-
-| Field | Example |
-|-------|---------|
-| Host | `localhost` |
-| Port | `5433` |
-| User | your Mac username |
-| Database | `edgar` |
-| Password | *(often blank for local Homebrew)* |
 
 ## Installation
 
@@ -120,7 +129,10 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 
 cp .env.example .env
-# Edit .env — at minimum set DATABASE_URL
+# Edit .env if needed (defaults match docker-compose.yml)
+
+# Start PostgreSQL + pgvector (see Prerequisites)
+docker compose up -d
 ```
 
 Initialize database tables:
@@ -134,7 +146,7 @@ edgar-etl init-db
 Copy `.env.example` to `.env`:
 
 ```env
-DATABASE_URL=postgresql://sanjuthomas@localhost:5433/edgar
+DATABASE_URL=postgresql://postgres:postgres@localhost:5433/edgar
 
 KAFKA_BOOTSTRAP_SERVERS=localhost:9092
 KAFKA_TOPIC=filings
@@ -246,7 +258,8 @@ HNSW index on `embedding` for fast cosine similarity search.
 ### Useful SQL
 
 ```bash
-psql postgresql://sanjuthomas@localhost:5433/edgar
+psql postgresql://postgres:postgres@localhost:5433/edgar
+# or: docker compose exec pgvector psql -U postgres -d edgar
 ```
 
 ```sql
@@ -283,6 +296,7 @@ edgar-etl search "executive compensation approval"
 ```
 sec-edgar-filings-to-pgvector/
 ├── pyproject.toml
+├── docker-compose.yml         # pgvector on Docker (data: /Volumes/Transcend/pgvector-data)
 ├── .env.example
 ├── sql/001_init.sql           # Database schema
 ├── examples/sample-event.json
@@ -319,8 +333,9 @@ Extraction tests use the sample 8-K at `/Volumes/Transcend/edgar/AEE/...` if the
 
 | Problem | Fix |
 |---------|-----|
-| `connection refused` on `psql -d postgres` | Homebrew Postgres not running; start it on port 5433 |
-| Port 5432 auth errors | That's likely Docker Postgres — use port **5433** for Homebrew |
+| `connection refused` on `psql` | Run `docker compose up -d` and check `docker compose ps` |
+| Container won't start (permissions) | Ensure `/Volumes/Transcend/pgvector-data` exists and is writable |
+| Port 5433 already in use | Stop other Postgres instances or change the host port in `docker-compose.yml` |
 | `filing not found` | External drive unmounted or wrong `local_path` in Kafka event |
 | Poor search results | Use the same `EMBEDDING_MODEL` for load and search |
 | Reprocess a filing | `edgar-etl process-event --json ... --force` |

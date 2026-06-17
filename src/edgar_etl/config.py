@@ -8,7 +8,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = "postgresql://postgres:postgres@localhost:5432/edgar"
+    database_url: str = "postgresql://postgres:postgres@localhost:5433/edgar"
     kafka_bootstrap_servers: str = "localhost:9092"
     kafka_topic: str = "filing.downloaded"
     kafka_group_id: str = "edgar-etl"
