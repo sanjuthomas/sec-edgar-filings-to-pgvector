@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS filings (
     chunk_count INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE INDEX IF NOT EXISTS idx_filings_ticker ON filings(ticker);
+
 CREATE TABLE IF NOT EXISTS filing_chunks (
     id BIGSERIAL PRIMARY KEY,
     accession_number TEXT NOT NULL REFERENCES filings(accession_number) ON DELETE CASCADE,

@@ -218,7 +218,7 @@ MONGO_FILING_METADATA_COLLECTION=filing_metadata
 
 KAFKA_BOOTSTRAP_SERVERS=kafka:9092
 KAFKA_TOPIC=filings
-KAFKA_GROUP_ID=edgar-etl
+KAFKA_GROUP_ID=edgar-pgvector-etl
 KAFKA_AUTO_OFFSET_RESET=earliest
 
 EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
@@ -282,7 +282,7 @@ edgar-etl consume
 To replay from offset 0, use a new consumer group:
 
 ```env
-KAFKA_GROUP_ID=edgar-etl-replay
+KAFKA_GROUP_ID=edgar-pgvector-etl-replay
 ```
 
 ### Process a single filing (no Kafka)
