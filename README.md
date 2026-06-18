@@ -453,3 +453,7 @@ Extraction tests use the sample 8-K at `/Volumes/Transcend/edgar/AEE/...` if the
 | `filing not found` | External drive unmounted; path outside `EDGAR_DATA_DIR`; or Docker can't access `/Volumes` (enable in Docker Desktop → Settings → Resources → File sharing) |
 | Poor search results | Use the same `EMBEDDING_MODEL` for load and search |
 | Reprocess a filing | `edgar-etl process-event --json ... --force` |
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).

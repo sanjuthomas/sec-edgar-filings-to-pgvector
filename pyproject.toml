@@ -7,6 +7,8 @@ name = "sec-edgar-filings-to-pgvector"
 version = "0.1.0"
 description = "Kafka consumer that extracts SEC EDGAR filings from local disk, embeds them, and loads into pgvector."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "beautifulsoup4>=4.12",
