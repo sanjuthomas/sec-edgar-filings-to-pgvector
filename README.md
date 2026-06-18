@@ -94,7 +94,7 @@ flowchart LR
     Disk -->|read .htm| ETL
 ```
 
-Both stacks join the same Docker network (`sec-edgar-filings_default` by default) so `edgar-etl` can reach `mongo` and `kafka` by service name.
+Both stacks join the same Docker network (`sec-edgar-filings_default` by default) so `edgar-pgvector-etl` can reach `mongo` and `kafka` by service name.
 
 ## Prerequisites
 
@@ -122,14 +122,14 @@ cd sec-edgar-filings-to-pgvector
 mkdir -p /Volumes/Transcend/pgvector-data
 cp .env.example .env
 docker compose up -d --build
-docker compose run --rm edgar-etl edgar-etl init-db   # first time only
+docker compose run --rm edgar-pgvector-etl edgar-etl init-db   # first time only
 docker compose ps
 ```
 
 **3. Verify**
 
 ```bash
-docker compose logs -f edgar-etl    # should connect to kafka:9092 and mongo:27017
+docker compose logs -f edgar-pgvector-etl    # should connect to kafka:9092 and mongo:27017
 open http://localhost:8000          # search UI (filing/chunk counts + semantic search)
 ```
 
@@ -140,8 +140,8 @@ open http://localhost:8000          # search UI (filing/chunk counts + semantic 
 | MongoDB | sec-edgar-filings | `mongo` | Filing metadata (producer writes, ETL reads) |
 | Kafka | sec-edgar-filings | `kafka` | `filing.downloaded` events (producer publishes, ETL consumes) |
 | pgvector | **this repo** | `edgar-pgvector` | Vector store for embeddings |
-| ETL consumer | **this repo** | `edgar-etl` | Kafka → MongoDB → embed → pgvector |
-| Search UI | **this repo** | `edgar-search` | Web UI + API for semantic search over pgvector |
+| ETL consumer | **this repo** | `edgar-pgvector-etl` | Kafka → MongoDB → embed → pgvector |
+| Search UI | **this repo** | `edgar-pgvector-search` | Web UI + API for semantic search over pgvector |
 
 **Host access to pgvector** (for `psql`, TablePlus, etc.):
 
@@ -161,7 +161,7 @@ open http://localhost:8000          # search UI (filing/chunk counts + semantic 
 2. **MongoDB** — provides `local_path` and metadata (ticker, form, etc.)
 3. **Local disk** — the ETL opens and reads the `.htm` file at `local_path`
 
-Files are downloaded to `/Volumes/Transcend/edgar` by [sec-edgar-filings](https://github.com/sanjuthomas/sec-edgar-filings). This project mounts that same directory read-only into the `edgar-etl` container at the **identical path**, so `local_path` values like `/Volumes/Transcend/edgar/AAPL/.../filing.htm` work inside Docker without translation.
+Files are downloaded to `/Volumes/Transcend/edgar` by [sec-edgar-filings](https://github.com/sanjuthomas/sec-edgar-filings). This project mounts that same directory read-only into the `edgar-pgvector-etl` container at the **identical path**, so `local_path` values like `/Volumes/Transcend/edgar/AAPL/.../filing.htm` work inside Docker without translation.
 
 On macOS, ensure Docker Desktop has file sharing enabled for `/Volumes`.
 
@@ -197,7 +197,7 @@ cp .env.example .env
 #   KAFKA_BOOTSTRAP_SERVERS=localhost:9092
 
 docker compose up -d pgvector
-docker compose run --rm edgar-etl edgar-etl init-db
+docker compose run --rm edgar-pgvector-etl edgar-etl init-db
 ```
 
 ## Configuration
@@ -254,9 +254,9 @@ LOG_LEVEL=INFO
 All commands are run via `edgar-etl`. In Docker:
 
 ```bash
-docker compose run --rm edgar-etl edgar-etl init-db
-docker compose up -d edgar-etl          # Kafka consumer (default CMD)
-docker compose run --rm edgar-etl edgar-etl search "revenue growth" --top-k 5
+docker compose run --rm edgar-pgvector-etl edgar-etl init-db
+docker compose up -d edgar-pgvector-etl          # Kafka consumer (default CMD)
+docker compose run --rm edgar-pgvector-etl edgar-etl search "revenue growth" --top-k 5
 ```
 
 On the host (local dev):
@@ -373,7 +373,7 @@ edgar-etl serve
 # open http://127.0.0.1:8000
 ```
 
-With Docker Compose, the `edgar-search` service is available at [http://localhost:8000](http://localhost:8000). The page shows filing/chunk counts (to verify data landed in pgvector) and a search form. By default it returns the **top 10** most similar chunks; you can change the number in the UI or via the API.
+With Docker Compose, the `edgar-pgvector-search` service is available at [http://localhost:8000](http://localhost:8000). The page shows filing/chunk counts (to verify data landed in pgvector) and a search form. By default it returns the **top 10** most similar chunks; you can change the number in the UI or via the API.
 
 | Endpoint | Description |
 |----------|-------------|
@@ -404,7 +404,7 @@ edgar-etl search "executive compensation approval"
 sec-edgar-filings-to-pgvector/
 ├── pyproject.toml
 ├── Dockerfile                 # ETL consumer image
-├── docker-compose.yml         # pgvector + edgar-etl (joins sec-edgar-filings network)
+├── docker-compose.yml         # pgvector + edgar-pgvector-etl + edgar-pgvector-search
 ├── .env.example
 ├── sql/001_init.sql           # Database schema
 ├── examples/sample-event.json

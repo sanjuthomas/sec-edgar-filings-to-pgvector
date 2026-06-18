@@ -1,6 +1,6 @@
 # Consumer stack for sec-edgar-filings.
 #
-# This compose file runs ONLY pgvector and the edgar-etl consumer.
+# This compose file runs ONLY pgvector, edgar-pgvector-etl, and edgar-pgvector-search.
 # MongoDB and Kafka are owned by sec-edgar-filings:
 #   https://github.com/sanjuthomas/sec-edgar-filings
 #
@@ -29,9 +29,9 @@ services:
       timeout: 5s
       retries: 5
 
-  edgar-search:
+  edgar-pgvector-search:
     build: .
-    container_name: edgar-search
+    container_name: edgar-pgvector-search
     depends_on:
       pgvector:
         condition: service_healthy
@@ -46,9 +46,9 @@ services:
     networks:
       - sec-edgar
 
-  edgar-etl:
+  edgar-pgvector-etl:
     build: .
-    container_name: edgar-etl
+    container_name: edgar-pgvector-etl
     depends_on:
       pgvector:
         condition: service_healthy
