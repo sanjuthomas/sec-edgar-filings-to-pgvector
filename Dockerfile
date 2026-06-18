@@ -10,7 +10,8 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY sql ./sql
 
-RUN pip install --no-cache-dir .
+ARG INSTALL_EXTRAS=[api]
+RUN pip install --no-cache-dir ".${INSTALL_EXTRAS}"
 
 ENV EDGAR_DATA_DIR=/Volumes/Transcend/edgar
 ENV DATABASE_URL=postgresql://postgres:postgres@pgvector:5432/edgar

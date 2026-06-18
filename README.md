@@ -130,6 +130,7 @@ docker compose ps
 
 ```bash
 docker compose logs -f edgar-etl    # should connect to kafka:9092 and mongo:27017
+open http://localhost:8000          # search UI (filing/chunk counts + semantic search)
 ```
 
 ### What runs where
@@ -140,6 +141,7 @@ docker compose logs -f edgar-etl    # should connect to kafka:9092 and mongo:270
 | Kafka | sec-edgar-filings | `kafka` | `filing.downloaded` events (producer publishes, ETL consumes) |
 | pgvector | **this repo** | `edgar-pgvector` | Vector store for embeddings |
 | ETL consumer | **this repo** | `edgar-etl` | Kafka → MongoDB → embed → pgvector |
+| Search UI | **this repo** | `edgar-search` | Web UI + API for semantic search over pgvector |
 
 **Host access to pgvector** (for `psql`, TablePlus, etc.):
 
@@ -264,7 +266,8 @@ edgar-etl init-db                              # Create tables + indexes
 edgar-etl consume                              # Start Kafka consumer
 edgar-etl process-event --json path/to.json    # Process one event offline
 edgar-etl process-file --file ... --ticker ... # Process one local file
-edgar-etl search "your question" --top-k 5     # Semantic search
+edgar-etl search "your question" --top-k 5     # Semantic search (CLI)
+edgar-etl serve                                # Search web UI at http://127.0.0.1:8000
 ```
 
 ### Kafka consumer
@@ -360,13 +363,33 @@ LIMIT 10;
 
 Embed your question with the **same model** used at load time, then find the nearest chunks.
 
+### Web UI
+
+Start the search UI locally or via Docker:
+
+```bash
+pip install -e ".[api]"
+edgar-etl serve
+# open http://127.0.0.1:8000
+```
+
+With Docker Compose, the `edgar-search` service is available at [http://localhost:8000](http://localhost:8000). The page shows filing/chunk counts (to verify data landed in pgvector) and a search form. By default it returns the **top 10** most similar chunks; you can change the number in the UI or via the API.
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /` | Search web UI |
+| `GET /api/stats` | `{ filing_count, chunk_count }` |
+| `GET /api/search?q=...&top_k=10&ticker=AEE&form=10-Q` | Semantic search JSON API |
+
+### CLI
+
 ```bash
 edgar-etl search "Who was elected director at Ameren?" --ticker AEE --top-k 5
 edgar-etl search "revenue growth" --form 10-Q --top-k 10
 edgar-etl search "executive compensation approval"
 ```
 
-**`--top-k N`** returns the **N most similar** chunks (default: 5). Lower `distance` = better match.
+**`--top-k N`** returns the **N most similar** chunks (CLI default: 5; web UI default: 10). Lower `distance` = better match.
 
 ### Full Q&A with an LLM
 
@@ -393,6 +416,8 @@ sec-edgar-filings-to-pgvector/
 │   ├── embed.py               # sentence-transformers
 │   ├── store.py               # pgvector upsert
 │   ├── query.py               # Semantic search
+│   ├── api.py                 # FastAPI search UI + JSON API
+│   ├── static/index.html      # Search web UI
 │   └── pipeline.py            # Orchestration
 └── tests/
 ```

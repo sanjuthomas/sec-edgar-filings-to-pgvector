@@ -77,6 +77,13 @@ def _build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("--ticker", help="Filter by ticker, e.g. AEE")
     search_parser.add_argument("--form", help="Filter by form, e.g. 10-Q or 8-K")
 
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="Start the semantic search web UI and API",
+    )
+    serve_parser.add_argument("--host", default="127.0.0.1", help="Bind address")
+    serve_parser.add_argument("--port", type=int, default=8000, help="Listen port")
+
     return parser
 
 
@@ -139,6 +146,15 @@ def main(argv: list[str] | None = None) -> None:
             form=args.form,
         )
         print(format_results(results))
+        return
+
+    if args.command == "serve":
+        import uvicorn
+
+        from edgar_etl.api import create_app
+
+        app = create_app(settings)
+        uvicorn.run(app, host=args.host, port=args.port)
         return
 
     parser.error(f"unknown command: {args.command}")
