@@ -5,6 +5,7 @@ import structlog
 from confluent_kafka import Consumer, KafkaError, KafkaException
 
 from edgar_etl.config import Settings
+from edgar_etl.errors import FilingNotIndexableError, NonContentProcessingError
 from edgar_etl.mongo import MongoFilingStore, enrich_event_from_mongo
 from edgar_etl.pipeline import configure_logging, parse_event, process_filing_event
 from edgar_etl.store import FilingStore
@@ -29,6 +30,7 @@ def run_consumer(settings: Settings | None = None) -> None:
             "bootstrap.servers": settings.kafka_bootstrap_servers,
             "group.id": settings.kafka_group_id,
             "auto.offset.reset": settings.kafka_auto_offset_reset,
+            "session.timeout.ms": settings.kafka_session_timeout_ms,
             "enable.auto.commit": False,
         }
     )
@@ -44,6 +46,7 @@ def run_consumer(settings: Settings | None = None) -> None:
         topic=settings.kafka_topic,
         group_id=settings.kafka_group_id,
         bootstrap_servers=settings.kafka_bootstrap_servers,
+        session_timeout_ms=settings.kafka_session_timeout_ms,
     )
 
     try:
@@ -56,11 +59,22 @@ def run_consumer(settings: Settings | None = None) -> None:
                     continue
                 raise KafkaException(message.error())
 
+            event = None
             try:
                 event = parse_event(message.value())
                 if mongo_store is not None:
                     event = enrich_event_from_mongo(event, mongo_store)
                 process_filing_event(event, settings, store=store)
+                consumer.commit(message=message, asynchronous=False)
+            except (FilingNotIndexableError, NonContentProcessingError) as exc:
+                logger.warning(
+                    "skipping filing without indexing",
+                    error=str(exc),
+                    accession_number=getattr(event, "accession_number", None),
+                    topic=message.topic(),
+                    partition=message.partition(),
+                    offset=message.offset(),
+                )
                 consumer.commit(message=message, asynchronous=False)
             except Exception:
                 logger.exception(

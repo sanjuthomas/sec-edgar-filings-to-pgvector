@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     kafka_topic: str = "filing.downloaded"
     kafka_group_id: str = "edgar-pgvector-etl"
     kafka_auto_offset_reset: str = "earliest"
+    kafka_session_timeout_ms: int = 180_000
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_batch_size: int = 32
     chunk_size: int = 1000

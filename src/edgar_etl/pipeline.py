@@ -5,6 +5,7 @@ import structlog
 
 from edgar_etl.config import Settings
 from edgar_etl.embed import embed_texts
+from edgar_etl.errors import FilingNotIndexableError, NonContentProcessingError
 from edgar_etl.extract import (
     chunk_text,
     extract_text_from_html,
@@ -77,10 +78,18 @@ def process_filing_event(
         ticker=event.ticker,
     )
 
-    html_content = read_filing_html(filing_path)
-    text = extract_text_from_html(html_content)
+    try:
+        html_content = read_filing_html(filing_path)
+        text = extract_text_from_html(html_content)
+    except FilingNotIndexableError:
+        raise
+    except Exception as exc:
+        raise FilingNotIndexableError(
+            f"failed to read or parse {event.accession_number}"
+        ) from exc
+
     if not text.strip():
-        raise ValueError(f"no extractable text in {filing_path}")
+        raise FilingNotIndexableError(f"no extractable text in {filing_path}")
 
     chunks = chunk_text(
         text,
@@ -88,15 +97,22 @@ def process_filing_event(
         chunk_overlap=settings.chunk_overlap,
     )
     if not chunks:
-        raise ValueError(f"no chunks produced for {event.accession_number}")
+        raise FilingNotIndexableError(
+            f"no chunks produced for {event.accession_number}"
+        )
 
-    embeddings = embed_texts(
-        [chunk.content for chunk in chunks],
-        model_name=settings.embedding_model,
-        batch_size=settings.embedding_batch_size,
-    )
+    try:
+        embeddings = embed_texts(
+            [chunk.content for chunk in chunks],
+            model_name=settings.embedding_model,
+            batch_size=settings.embedding_batch_size,
+        )
+        count = filing_store.upsert_filing(event, chunks, embeddings)
+    except Exception as exc:
+        raise NonContentProcessingError(
+            f"failed to index {event.accession_number}"
+        ) from exc
 
-    count = filing_store.upsert_filing(event, chunks, embeddings)
     logger.info(
         "filing loaded",
         accession_number=event.accession_number,

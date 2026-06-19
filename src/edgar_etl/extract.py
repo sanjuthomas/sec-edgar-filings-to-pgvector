@@ -65,7 +65,9 @@ def extract_text_from_html(html_content: str) -> str:
 
 
 def _remove_hidden_xbrl(soup: BeautifulSoup) -> None:
-    for tag in soup.find_all(["div", "span"]):
+    for tag in list(soup.find_all(["div", "span"])):
+        if tag.attrs is None:
+            continue
         style = tag.get("style", "")
         if HIDDEN_STYLE_RE.search(style):
             tag.decompose()
