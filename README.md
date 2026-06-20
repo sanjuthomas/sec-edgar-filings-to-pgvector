@@ -33,8 +33,8 @@ sequenceDiagram
         ETL->>Disk: read local_path (.htm)
         Disk-->>ETL: iXBRL HTML
         ETL->>ETL: extract text, chunk
-        ETL->>Model: embed chunks (BAAI/bge-small-en-v1.5)
-        Model-->>ETL: vectors (384-dim)
+        ETL->>Model: embed chunks (BAAI/bge-m3)
+        Model-->>ETL: vectors (1024-dim)
         ETL->>PG: upsert filings + filing_chunks
         ETL->>Kafka: commit offset
     end
@@ -223,8 +223,8 @@ KAFKA_TOPIC=filings
 KAFKA_GROUP_ID=edgar-pgvector-etl
 KAFKA_AUTO_OFFSET_RESET=earliest
 
-EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
-EMBEDDING_BATCH_SIZE=32
+EMBEDDING_MODEL=BAAI/bge-m3
+EMBEDDING_BATCH_SIZE=16
 
 CHUNK_SIZE=1000
 CHUNK_OVERLAP=150
@@ -246,7 +246,8 @@ LOG_LEVEL=INFO
 | `KAFKA_TOPIC` | Topic to consume (default in sec-edgar-filings: `filings`) |
 | `KAFKA_GROUP_ID` | Consumer group for offset tracking |
 | `KAFKA_AUTO_OFFSET_RESET` | `earliest` = start from offset 0 for new groups |
-| `EMBEDDING_MODEL` | Hugging Face model (384 dimensions) |
+| `EMBEDDING_MODEL` | Hugging Face model (1024 dimensions for BGE-M3) |
+| `EMBEDDING_BATCH_SIZE` | Embedding batch size (default: 16 for BGE-M3) |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | Text splitting parameters |
 
 ## CLI commands
@@ -337,10 +338,20 @@ edgar-etl process-file \
 | Column | Description |
 |--------|-------------|
 | `content` | Text chunk |
-| `embedding` | `vector(384)` |
+| `embedding` | `vector(1024)` |
 | `metadata` | JSONB (ticker, form, section, etc.) |
 
 HNSW index on `embedding` for fast cosine similarity search.
+
+**Upgrading from 384-dim embeddings (bge-small):** run the migration, then re-index filings:
+
+```bash
+docker compose exec pgvector psql -U postgres -d edgar -f /dev/stdin < sql/002_bge_m3_1024.sql
+# or from host:
+psql postgresql://postgres:postgres@localhost:5433/edgar -f sql/002_bge_m3_1024.sql
+```
+
+This clears existing filings/chunks (384-dim vectors are incompatible). Reprocess with a new Kafka consumer group or `--force` on offline commands.
 
 ### Useful SQL
 
@@ -406,7 +417,9 @@ sec-edgar-filings-to-pgvector/
 ├── Dockerfile                 # ETL consumer image
 ├── docker-compose.yml         # pgvector + edgar-pgvector-etl + edgar-pgvector-search
 ├── .env.example
-├── sql/001_init.sql           # Database schema
+├── sql/
+│   ├── 001_init.sql           # Database schema (1024-dim vectors)
+│   └── 002_bge_m3_1024.sql    # Migration from 384-dim to BGE-M3
 ├── examples/sample-event.json
 ├── src/edgar_etl/
 │   ├── cli.py                 # CLI entry point
@@ -428,7 +441,7 @@ sec-edgar-filings-to-pgvector/
 |-------|---------|
 | Kafka | confluent-kafka |
 | HTML parsing | BeautifulSoup + lxml |
-| Embeddings | sentence-transformers (`BAAI/bge-small-en-v1.5`) |
+| Embeddings | sentence-transformers (`BAAI/bge-m3`, 1024-dim) |
 | Database | psycopg + pgvector |
 | MongoDB | pymongo |
 | Config | pydantic-settings |
@@ -451,7 +464,8 @@ Extraction tests use the sample 8-K at `/Volumes/Transcend/edgar/AEE/...` if the
 | Container won't start (permissions) | Ensure `/Volumes/Transcend/pgvector-data` exists and is writable |
 | Port 5433 already in use | Stop other Postgres instances or change the host port in `docker-compose.yml` |
 | `filing not found` | External drive unmounted; path outside `EDGAR_DATA_DIR`; or Docker can't access `/Volumes` (enable in Docker Desktop → Settings → Resources → File sharing) |
-| Poor search results | Use the same `EMBEDDING_MODEL` for load and search |
+| Poor search results | Use the same `EMBEDDING_MODEL` for load and search; BGE-M3 uses a query prompt at search time |
+| Dimension mismatch on insert | Run `sql/002_bge_m3_1024.sql` and re-index filings |
 | Reprocess a filing | `edgar-etl process-event --json ... --force` |
 
 ## License

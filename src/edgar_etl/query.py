@@ -25,10 +25,12 @@ def search_filings(
     ticker: str | None = None,
     form: str | None = None,
 ) -> list[SearchResult]:
+    prompt_name = "query" if "bge-m3" in settings.embedding_model.lower() else None
     query_vector = embed_texts(
         [question],
         model_name=settings.embedding_model,
         batch_size=1,
+        prompt_name=prompt_name,
     )[0]
 
     conditions = ["TRUE"]

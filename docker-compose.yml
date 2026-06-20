@@ -37,7 +37,8 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://postgres:postgres@pgvector:5432/edgar
-      EMBEDDING_MODEL: BAAI/bge-small-en-v1.5
+      EMBEDDING_MODEL: BAAI/bge-m3
+      EMBEDDING_BATCH_SIZE: 16
       LOG_LEVEL: INFO
     ports:
       - "8000:8000"
@@ -64,6 +65,8 @@ services:
       KAFKA_TOPIC: filings
       KAFKA_GROUP_ID: edgar-pgvector-etl
       KAFKA_AUTO_OFFSET_RESET: earliest
+      EMBEDDING_MODEL: BAAI/bge-m3
+      EMBEDDING_BATCH_SIZE: 16
     volumes:
       # Filing .htm content is read from this host path (same as sec-edgar-filings).
       - ${EDGAR_HOST_PATH:-/Volumes/Transcend/edgar}:${EDGAR_HOST_PATH:-/Volumes/Transcend/edgar}:ro

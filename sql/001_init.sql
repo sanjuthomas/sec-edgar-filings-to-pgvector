@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS filing_chunks (
     accession_number TEXT NOT NULL REFERENCES filings(accession_number) ON DELETE CASCADE,
     chunk_index INTEGER NOT NULL,
     content TEXT NOT NULL,
-    embedding vector(384) NOT NULL,
+    embedding vector(1024) NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}',
     UNIQUE (accession_number, chunk_index)
 );
