@@ -73,25 +73,33 @@ flowchart LR
     end
 
     subgraph consumer ["sec-edgar-filings-to-pgvector (this repo)"]
-        ETL[edgar-pgvector-etl :8001]
         Admin[Admin UI :8001]
+        ETL[edgar-pgvector-etl :8001]
+        Embedded[Embedded BGE-M3<br/>sentence-transformers<br/>in ETL container]
         subgraph PG ["ParadeDB Postgres"]
             FC[filing_chunks]
             VEC[pgvector<br/>embedding + HNSW]
             BM25[pg_search<br/>BM25 on content]
         end
+        Admin -->|pick backend on load| ETL
+        ETL -->|chunks| Embedded
+        Embedded -->|vectors| ETL
         ETL -->|content + vectors| FC
         FC --> VEC
         FC --> BM25
-        Admin --> ETL
+    end
+
+    subgraph host ["Host machine (outside Docker)"]
+        Ollama[Ollama :11434<br/>BGE-M3 /api/embed]
     end
 
     Kafka -->|filing.downloaded| ETL
     Mongo -->|filing_metadata lookup| ETL
     Disk -->|read .htm| ETL
+    ETL <-->|chunks in, vectors out| Ollama
 ```
 
-On ingest, each `filing_chunks` row is stored into **both** indexes: pgvector holds the dense `embedding`; ParadeDB `pg_search` BM25 indexes `content` automatically on the same insert. **Querying** those indexes (semantic or keyword) is handled by a separate chat UI project — not this repo.
+On ingest, each `filing_chunks` row is stored into **both** indexes: pgvector holds the dense `embedding`; ParadeDB `pg_search` BM25 indexes `content` automatically on the same insert. **Vectors** come from one of two backends (chosen in the admin UI when loading a ticker): **Embedded — BGE-M3** runs in-process inside `edgar-pgvector-etl`; **Ollama — BGE-M3** calls the host Ollama server (`host.docker.internal:11434`). **Querying** those indexes (semantic or keyword) is handled by a separate chat UI project — not this repo.
 
 Both stacks join the same Docker network (`sec-edgar_default` by default) so `edgar-pgvector-etl` can reach `mongo` and `kafka` by service name.
 
