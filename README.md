@@ -1,8 +1,21 @@
 # SEC EDGAR Filings → pgvector
 
-Transform and load SEC EDGAR filings into PostgreSQL with [ParadeDB](https://www.paradedb.com/) (pgvector + BM25 full-text search via `pg_search`).
+Transform and load SEC EDGAR filings into PostgreSQL. For each filing, the ETL **extracts** plain text from inline XBRL HTML, **chunks** it into overlapping segments (configurable size and overlap), **embeds** each chunk with BGE-M3 (in-process or via Ollama on the host), and **upserts** the results into `filing_chunks`. Each insert writes to **both** search stores on the same row: chunk **text** goes to the BM25 keyword index (`pg_search` on `content`), and the **embedding** vector goes to pgvector (`embedding` column + HNSW index) for downstream semantic search.
 
-This service listens to Kafka for `filing.downloaded` events, looks up filing metadata in MongoDB, then **reads the actual `.htm` files from the local filesystem** (it does not download from SEC). It extracts text from inline XBRL HTML, generates embeddings, and **stores each chunk in both search indexes** on ParadeDB Postgres: pgvector (`embedding`) and `pg_search` BM25 (`content`).
+The database runs the [ParadeDB](https://www.paradedb.com/) PostgreSQL distribution, which bundles pgvector and the `pg_search` BM25 extension in one Postgres instance.
+
+This service listens to Kafka for `filing.downloaded` events, looks up filing metadata in MongoDB, then **reads the actual `.htm` files from the local filesystem** at `SEC_EDGAR_DOCUMENT_ROOT` (it does not download from SEC). There is no separate BM25 indexing step — keyword and vector indexes update when the chunk row is inserted.
+
+### Shared path conventions
+
+| Concept | Meaning |
+|---------|---------|
+| **`SEC_EDGAR_DOCUMENT_ROOT`** | Host directory for downloaded filing `.htm` files (same path in crawler + consumer stacks) |
+| **`LOCAL_DATA_ROOT`** | Parent directory for bind-mounted data (filings, Postgres, model cache, etc.) |
+
+In `.env`, set `SEC_EDGAR_DOCUMENT_ROOT=${LOCAL_DATA_ROOT}/edgar-filings` (see `.env.example`). This repo maps it to `EDGAR_DATA_DIR` and `EDGAR_HOST_PATH`. The crawler uses `EDGAR_DOWNLOAD_BASE` / `EDGAR_HOST_PATH` for the same location.
+
+Example on-disk path: `${SEC_EDGAR_DOCUMENT_ROOT}/AAPL/000032019324000106/aapl-20240928.htm`
 
 ## Data flow
 
@@ -50,7 +63,7 @@ sequenceDiagram
 
 | In scope | Out of scope |
 |----------|--------------|
-| Read `.htm` files from `/Volumes/Transcend/edgar` | Download filings from SEC EDGAR |
+| Read `.htm` files from `SEC_EDGAR_DOCUMENT_ROOT` | Download filings from SEC EDGAR |
 | Consume Kafka events (read-only) | Run or manage Kafka |
 | Read filing metadata from MongoDB (read-only) | Write to MongoDB |
 | Extract, chunk, embed, load into ParadeDB (pgvector + BM25) | Semantic/keyword search or RAG chat UI |
@@ -106,8 +119,7 @@ Both stacks join the same Docker network (`sec-edgar_default` by default) so `ed
 ## Prerequisites
 
 - **Docker** with Compose v2
-- **[sec-edgar-filings-crawler](https://github.com/sanjuthomas/sec-edgar-filings-crawler)** running (`mongo`, `kafka`, and downloaded filings)
-- External drive mounted at `/Volumes/Transcend/edgar` (shared with sec-edgar-filings-crawler)
+- **[sec-edgar-filings-crawler](https://github.com/sanjuthomas/sec-edgar-filings-crawler)** running (`mongo`, `kafka`, and filings under `SEC_EDGAR_DOCUMENT_ROOT`)
 
 ### Quick start
 
@@ -126,8 +138,8 @@ docker compose --profile jobs run --rm download-sp500   # optional: fetch filing
 ```bash
 git clone https://github.com/sanjuthomas/sec-edgar-filings-to-pgvector.git
 cd sec-edgar-filings-to-pgvector
-mkdir -p /Volumes/Transcend/pgvector-data
-cp .env.example .env
+mkdir -p "${LOCAL_DATA_ROOT:-./local-data}/pgvector-data"
+cp .env.example .env   # set LOCAL_DATA_ROOT and SEC_EDGAR_DOCUMENT_ROOT
 docker compose up -d --build
 docker compose run --rm edgar-pgvector-etl edgar-etl init-db   # first time only
 docker compose ps
@@ -160,7 +172,7 @@ docker compose exec pgvector psql -U postgres -d edgar -c "SELECT COUNT(*) FROM 
 | Password | `postgres` |
 | Database | `edgar` |
 
-### Local filing storage (`/Volumes/Transcend/edgar`)
+### Local filing storage (`SEC_EDGAR_DOCUMENT_ROOT`)
 
 **Filing content always comes from the local filesystem**, not from MongoDB or Kafka. Those services only provide metadata and processing triggers:
 
@@ -168,11 +180,11 @@ docker compose exec pgvector psql -U postgres -d edgar -c "SELECT COUNT(*) FROM 
 2. **MongoDB** — provides `local_path` and metadata (ticker, form, etc.)
 3. **Local disk** — the ETL opens and reads the `.htm` file at `local_path`
 
-Files are downloaded to `/Volumes/Transcend/edgar` by [sec-edgar-filings-crawler](https://github.com/sanjuthomas/sec-edgar-filings-crawler). This project mounts that same directory read-only into the `edgar-pgvector-etl` container at the **identical path**, so `local_path` values like `/Volumes/Transcend/edgar/AAPL/.../filing.htm` work inside Docker without translation.
+Files are downloaded by [sec-edgar-filings-crawler](https://github.com/sanjuthomas/sec-edgar-filings-crawler) under `SEC_EDGAR_DOCUMENT_ROOT`. This project bind-mounts that directory read-only into `edgar-pgvector-etl` at the **same absolute path** as on the host, so `local_path` values like `${SEC_EDGAR_DOCUMENT_ROOT}/AAPL/.../filing.htm` work inside Docker without translation.
 
-On macOS, ensure Docker Desktop has file sharing enabled for `/Volumes`.
+Ensure Docker Desktop (or your runtime) can read the host directory you choose for `SEC_EDGAR_DOCUMENT_ROOT`.
 
-Paths must stay under `EDGAR_DATA_DIR` (default: `/Volumes/Transcend/edgar`).
+Paths must stay under `EDGAR_DATA_DIR` (same value as `SEC_EDGAR_DOCUMENT_ROOT` in `.env`).
 
 ### Postgres clients (optional)
 
@@ -217,7 +229,10 @@ SEC_EDGAR_DOCKER_NETWORK=sec-edgar_default
 
 DATABASE_URL=postgresql://postgres:postgres@localhost:5433/edgar
 
-EDGAR_DATA_DIR=/Volumes/Transcend/edgar
+LOCAL_DATA_ROOT=/path/to/your/sec-edgar-data
+SEC_EDGAR_DOCUMENT_ROOT=${LOCAL_DATA_ROOT}/edgar-filings
+EDGAR_DATA_DIR=${SEC_EDGAR_DOCUMENT_ROOT}
+EDGAR_HOST_PATH=${SEC_EDGAR_DOCUMENT_ROOT}
 ALLOWED_FORMS=10-K,10-Q,10-K/A,10-Q/A
 
 # Read-only — services run in sec-edgar-filings-crawler
@@ -243,8 +258,10 @@ LOG_LEVEL=INFO
 |----------|-------------|
 | `SEC_EDGAR_DOCKER_NETWORK` | Shared Docker network from sec-edgar-filings-crawler compose (default: `sec-edgar_default`) |
 | `DATABASE_URL` | PostgreSQL connection string (this project's pgvector) |
-| `EDGAR_DATA_DIR` | Root directory for `.htm` filing files on disk (default: `/Volumes/Transcend/edgar`) |
-| `EDGAR_HOST_PATH` | Host bind-mount path for Docker (Compose only; defaults to `EDGAR_DATA_DIR`) |
+| `LOCAL_DATA_ROOT` | Parent directory for bind-mounted data (Postgres, HF cache, config, etc.) |
+| `SEC_EDGAR_DOCUMENT_ROOT` | Host directory for filing `.htm` files (typically `${LOCAL_DATA_ROOT}/edgar-filings`) |
+| `EDGAR_DATA_DIR` | Same as `SEC_EDGAR_DOCUMENT_ROOT`; used by the ETL to resolve `local_path` |
+| `EDGAR_HOST_PATH` | Host bind-mount path for Docker (Compose only; keep aligned with `EDGAR_DATA_DIR`) |
 | `ALLOWED_FORMS` | Comma-separated forms to process (others are skipped) |
 | `MONGO_URI` | MongoDB connection — **read-only**; service runs in sec-edgar-filings-crawler |
 | `MONGO_DB` | MongoDB database name |
@@ -302,7 +319,7 @@ edgar-etl process-event --json examples/sample-event.json
 
 ```bash
 edgar-etl process-file \
-  --file /Volumes/Transcend/edgar/AEE/000110465926063184/tm2614913d1_8k.htm \
+  --file "${SEC_EDGAR_DOCUMENT_ROOT}/AEE/000110465926063184/tm2614913d1_8k.htm" \
   --ticker AEE \
   --company-name "AMEREN CORP" \
   --form 8-K \
@@ -321,7 +338,7 @@ edgar-etl process-file \
   "filing_date": "2026-06-01",
   "form": "10-Q",
   "accession_number": "0001090872-26-000055",
-  "local_path": "/Volumes/Transcend/edgar/A/000109087226000055/a-20260430.htm",
+  "local_path": "${SEC_EDGAR_DOCUMENT_ROOT}/A/000109087226000055/a-20260430.htm",
   "document_url": "https://www.sec.gov/Archives/edgar/data/1090872/000109087226000055/a-20260430.htm",
   "downloaded_at": "2026-06-16T17:28:23.652799Z"
 }
@@ -422,7 +439,7 @@ sec-edgar-filings-to-pgvector/
 pytest
 ```
 
-Extraction tests use the sample 8-K at `/Volumes/Transcend/edgar/AEE/...` if the file is available.
+Extraction tests use a sample 8-K under `${SEC_EDGAR_DOCUMENT_ROOT}` if available locally.
 
 ## Troubleshooting
 
@@ -431,9 +448,9 @@ Extraction tests use the sample 8-K at `/Volumes/Transcend/edgar/AEE/...` if the
 | `network sec-edgar_default not found` | Start sec-edgar-filings-crawler first: `cd sec-edgar-filings-crawler && docker compose up -d` |
 | ETL can't reach Kafka/MongoDB | Confirm sec-edgar-filings-crawler is running; check `SEC_EDGAR_DOCKER_NETWORK` matches `docker network ls` |
 | `connection refused` on `psql` | Run `docker compose up -d` here and check `docker compose ps` |
-| Container won't start (permissions) | Ensure `/Volumes/Transcend/pgvector-data` exists and is writable |
+| Container won't start (permissions) | Ensure `${LOCAL_DATA_ROOT}` and `${PGVECTOR_HOST_PATH:-${LOCAL_DATA_ROOT}/pgvector-data}` exist and are writable |
 | Port 5433 already in use | Stop other Postgres instances or change the host port in `docker-compose.yml` |
-| `filing not found` | External drive unmounted; path outside `EDGAR_DATA_DIR`; or Docker can't access `/Volumes` (enable in Docker Desktop → Settings → Resources → File sharing) |
+| `filing not found` | Path outside `SEC_EDGAR_DOCUMENT_ROOT` / `EDGAR_DATA_DIR`; crawler and ETL must share the same mount; check Docker file sharing for your chosen host path |
 | Dimension mismatch on insert | Run `sql/002_bge_m3_1024.sql` and re-index filings |
 | Reprocess a filing | `edgar-etl process-event --json ... --force` |
 
