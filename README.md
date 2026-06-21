@@ -2,28 +2,32 @@
 
 Transform and load SEC EDGAR filings into PostgreSQL with [ParadeDB](https://www.paradedb.com/) (pgvector + BM25 full-text search via `pg_search`).
 
-This service listens to Kafka for `filing.downloaded` events, looks up filing metadata in MongoDB, then **reads the actual `.htm` files from the local filesystem** at `/Volumes/Transcend/edgar` (it does not download from SEC). It extracts text from inline XBRL HTML, generates embeddings, and stores them in pgvector.
+This service listens to Kafka for `filing.downloaded` events, looks up filing metadata in MongoDB, then **reads the actual `.htm` files from the local filesystem** (it does not download from SEC). It extracts text from inline XBRL HTML, generates embeddings, and **stores each chunk in both search indexes** on ParadeDB Postgres: pgvector (`embedding`) and `pg_search` BM25 (`content`).
 
 ## Data flow
 
 This service consumes events produced by [sec-edgar-filings](https://github.com/sanjuthomas/sec-edgar-filings)
 after filings are downloaded to local disk. It does not call SEC EDGAR directly.
 
-### Ingest (Kafka → pgvector)
+### Ingest (Kafka → pgvector + pg_search)
+
+Each chunk is written once to `filing_chunks`; that single `INSERT` populates **both** stores — the pgvector embedding column and the ParadeDB BM25 index on content (no separate BM25 ETL step).
 
 ```mermaid
 sequenceDiagram
     participant Kafka as Kafka (filings)
-    participant ETL as edgar-etl consume
+    participant ETL as edgar-pgvector-etl
     participant Mongo as MongoDB (filing_metadata)
-    participant Disk as /Volumes/Transcend/edgar
-    participant Model as sentence-transformers
-    participant PG as PostgreSQL (pgvector)
+    participant Disk as Local EDGAR .htm files
+    participant Embed as Embedding (embedded or Ollama BGE-M3)
+    participant PG as ParadeDB Postgres
+    participant VEC as pgvector (embedding)
+    participant BM25 as pg_search BM25 (content)
 
     Kafka->>ETL: filing.downloaded event (JSON)
     ETL->>Mongo: lookup by accession_number
     Mongo-->>ETL: local_path, ticker, form, ...
-    Note over ETL: allowed form (10-K / 10-Q)?
+    Note over ETL: allowed form (10-K / 10-Q / 8-K)?
 
     ETL->>PG: accession already processed?
     alt already in filings
@@ -33,28 +37,13 @@ sequenceDiagram
         ETL->>Disk: read local_path (.htm)
         Disk-->>ETL: iXBRL HTML
         ETL->>ETL: extract text, chunk
-        ETL->>Model: embed chunks (BAAI/bge-m3)
-        Model-->>ETL: vectors (1024-dim)
+        ETL->>Embed: embed chunks (BGE-M3)
+        Embed-->>ETL: vectors (1024-dim)
         ETL->>PG: upsert filings + filing_chunks
+        PG->>VEC: store embedding per chunk
+        PG->>BM25: index content per chunk (auto on INSERT)
         ETL->>Kafka: commit offset
     end
-```
-
-### Query (semantic search)
-
-```mermaid
-sequenceDiagram
-    participant User as User / CLI
-    participant Search as edgar-etl search
-    participant Model as sentence-transformers
-    participant PG as PostgreSQL + pgvector
-
-    User->>Search: question + optional filters (ticker, form, top-k)
-    Search->>Model: embed question
-    Model-->>Search: query vector
-    Search->>PG: nearest-neighbor search (cosine distance)
-    PG-->>Search: top-K filing chunks + metadata
-    Search-->>User: matching passages
 ```
 
 ## What this project does / does not do
@@ -64,7 +53,7 @@ sequenceDiagram
 | Read `.htm` files from `/Volumes/Transcend/edgar` | Download filings from SEC EDGAR |
 | Consume Kafka events (read-only) | Run or manage Kafka |
 | Read filing metadata from MongoDB (read-only) | Write to MongoDB |
-| Extract, chunk, embed, load into pgvector | LLM-generated answers (RAG chat) |
+| Extract, chunk, embed, load into ParadeDB (pgvector + BM25) | Semantic/keyword search or RAG chat UI |
 | Run pgvector + ETL consumer in Docker | SEC rate limiting / User-Agent handling |
 
 **MongoDB and Kafka live in [sec-edgar-filings](https://github.com/sanjuthomas/sec-edgar-filings)** — that project downloads filings, writes metadata to MongoDB, and publishes Kafka events. This project only connects to those services as a downstream consumer.
@@ -77,22 +66,32 @@ flowchart LR
         DL[Downloader / API]
         Mongo[(MongoDB)]
         Kafka[[Kafka]]
-        Disk[(/Volumes/Transcend/edgar)]
+        Disk[(Local EDGAR .htm files)]
         DL --> Mongo
         DL --> Disk
         DL --> Kafka
     end
 
     subgraph consumer ["sec-edgar-filings-to-pgvector (this repo)"]
-        ETL[edgar-etl]
-        PG[(pgvector)]
-        ETL --> PG
+        ETL[edgar-pgvector-etl :8001]
+        Admin[Admin UI :8001]
+        subgraph PG ["ParadeDB Postgres"]
+            FC[filing_chunks]
+            VEC[pgvector<br/>embedding + HNSW]
+            BM25[pg_search<br/>BM25 on content]
+        end
+        ETL -->|content + vectors| FC
+        FC --> VEC
+        FC --> BM25
+        Admin --> ETL
     end
 
     Kafka -->|filing.downloaded| ETL
     Mongo -->|filing_metadata lookup| ETL
     Disk -->|read .htm| ETL
 ```
+
+On ingest, each `filing_chunks` row is stored into **both** indexes: pgvector holds the dense `embedding`; ParadeDB `pg_search` BM25 indexes `content` automatically on the same insert. **Querying** those indexes (semantic or keyword) is handled by a separate chat UI project — not this repo.
 
 Both stacks join the same Docker network (`sec-edgar_default` by default) so `edgar-pgvector-etl` can reach `mongo` and `kafka` by service name.
 
@@ -130,7 +129,8 @@ docker compose ps
 
 ```bash
 docker compose logs -f edgar-pgvector-etl    # should connect to kafka:9092 and mongo:27017
-open http://localhost:8000          # search UI (filing/chunk counts + semantic search)
+open http://localhost:8001          # admin UI (load tickers, truncate, Kafka)
+docker compose exec pgvector psql -U postgres -d edgar -c "SELECT COUNT(*) FROM filing_chunks;"
 ```
 
 ### What runs where
@@ -140,8 +140,7 @@ open http://localhost:8000          # search UI (filing/chunk counts + semantic 
 | MongoDB | sec-edgar-filings | `mongo` | Filing metadata (producer writes, ETL reads) |
 | Kafka | sec-edgar-filings | `kafka` | `filing.downloaded` events (producer publishes, ETL consumes) |
 | pgvector | **this repo** | `edgar-pgvector` | ParadeDB Postgres (pgvector + BM25 `pg_search`) |
-| ETL consumer | **this repo** | `edgar-pgvector-etl` | Kafka → MongoDB → embed → pgvector |
-| Search UI | **this repo** | `pgvector-browser` (`edgar-pgvector-browser`) | Web UI + API for semantic search over pgvector |
+| ETL + Admin | **this repo** | `edgar-pgvector-etl` | Kafka → MongoDB → embed → ParadeDB (:8001 admin) |
 
 **Host access to pgvector** (for `psql`, TablePlus, etc.):
 
@@ -180,7 +179,7 @@ pgvector runs inside Postgres — any Postgres client works:
 
 ## Installation (local dev, optional)
 
-For offline commands (`process-file`, `search`, tests) without running the consumer in Docker:
+For offline ETL commands (`process-file`, `process-event`, tests) without running the consumer in Docker:
 
 ```bash
 git clone <repo-url> sec-edgar-filings-to-pgvector
@@ -256,19 +255,17 @@ All commands are run via `edgar-etl`. In Docker:
 
 ```bash
 docker compose run --rm edgar-pgvector-etl edgar-etl init-db
-docker compose up -d edgar-pgvector-etl          # Kafka consumer (default CMD)
-docker compose run --rm edgar-pgvector-etl edgar-etl search "revenue growth" --top-k 5
+docker compose up -d edgar-pgvector-etl          # standby + admin UI (default CMD)
 ```
 
 On the host (local dev):
 
 ```bash
 edgar-etl init-db                              # Create tables + indexes
-edgar-etl consume                              # Start Kafka consumer
+edgar-etl standby                              # Admin UI at http://127.0.0.1:8001
+edgar-etl consume                              # Start Kafka consumer (no admin UI)
 edgar-etl process-event --json path/to.json    # Process one event offline
 edgar-etl process-file --file ... --ticker ... # Process one local file
-edgar-etl search "your question" --top-k 5     # Semantic search (CLI)
-edgar-etl serve                                # Search web UI at http://127.0.0.1:8000
 ```
 
 ### Kafka consumer
@@ -341,7 +338,9 @@ edgar-etl process-file \
 | `embedding` | `vector(1024)` |
 | `metadata` | JSONB (ticker, form, section, etc.) |
 
-HNSW index on `embedding` for fast cosine similarity search.
+HNSW index on `embedding` (for downstream semantic search).
+
+ParadeDB `pg_search` BM25 index on `content` (and related columns) — updated automatically on `INSERT`/`DELETE`; no separate indexing step.
 
 **Upgrading from 384-dim embeddings (bge-small):** run the migration, then re-index filings:
 
@@ -370,67 +369,30 @@ ORDER BY filing_date DESC
 LIMIT 10;
 ```
 
-## Querying (semantic search)
-
-Embed your question with the **same model** used at load time, then find the nearest chunks.
-
-### Web UI
-
-Start the search UI locally or via Docker:
-
-```bash
-pip install -e ".[api]"
-edgar-etl serve
-# open http://127.0.0.1:8000
-```
-
-With Docker Compose, the `pgvector-browser` service is available at [http://localhost:8000](http://localhost:8000). The page shows filing/chunk counts (to verify data landed in pgvector) and a search form. By default it returns the **top 10** most similar chunks; you can change the number in the UI or via the API.
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /` | Search web UI |
-| `GET /api/stats` | `{ filing_count, chunk_count }` |
-| `GET /api/search?q=...&top_k=10&ticker=AEE&form=10-Q` | Semantic search JSON API |
-
-### CLI
-
-```bash
-edgar-etl search "Who was elected director at Ameren?" --ticker AEE --top-k 5
-edgar-etl search "revenue growth" --form 10-Q --top-k 10
-edgar-etl search "executive compensation approval"
-```
-
-**`--top-k N`** returns the **N most similar** chunks (CLI default: 5; web UI default: 10). Lower `distance` = better match.
-
-### Full Q&A with an LLM
-
-`search` returns source passages, not a synthesized answer. For natural-language answers:
-
-1. Retrieve chunks with `edgar-etl search`
-2. Send chunks + question to an LLM (Ollama, OpenAI, etc.)
-
 ## Project layout
 
 ```
 sec-edgar-filings-to-pgvector/
 ├── pyproject.toml
 ├── Dockerfile                 # ETL consumer image
-├── docker-compose.yml         # pgvector + pgvector-browser + edgar-pgvector-etl
+├── docker-compose.yml         # ParadeDB + edgar-pgvector-etl (+ optional pgvector-browser)
 ├── .env.example
 ├── sql/
-│   ├── 001_init.sql           # Database schema (1024-dim vectors)
-│   └── 002_bge_m3_1024.sql    # Migration from 384-dim to BGE-M3
+│   ├── 001_init.sql           # Database schema (1024-dim vectors + BM25)
+│   ├── 002_bge_m3_1024.sql    # Migration from 384-dim to BGE-M3
+│   └── 003_paradedb_pgsearch.sql
 ├── examples/sample-event.json
 ├── src/edgar_etl/
 │   ├── cli.py                 # CLI entry point
-│   ├── consumer.py            # Kafka consumer (+ MongoDB enrichment)
+│   ├── consumer.py            # Kafka consumer
+│   ├── admin_api.py           # Admin UI + API (:8001)
+│   ├── admin_service.py       # Truncate, load ticker, connectivity
 │   ├── mongo.py               # filing_metadata lookup
 │   ├── extract.py             # iXBRL HTML extraction + chunking
-│   ├── embed.py               # sentence-transformers
-│   ├── store.py               # pgvector upsert
-│   ├── query.py               # Semantic search
-│   ├── api.py                 # FastAPI search UI + JSON API
-│   ├── static/index.html      # Search web UI
+│   ├── embed.py               # Embeddings (embedded or Ollama)
+│   ├── store.py               # ParadeDB upsert (pgvector + BM25)
+│   ├── paradedb_search.py     # BM25 index helpers
+│   ├── static/admin.html      # Admin web UI
 │   └── pipeline.py            # Orchestration
 └── tests/
 ```
@@ -464,7 +426,6 @@ Extraction tests use the sample 8-K at `/Volumes/Transcend/edgar/AEE/...` if the
 | Container won't start (permissions) | Ensure `/Volumes/Transcend/pgvector-data` exists and is writable |
 | Port 5433 already in use | Stop other Postgres instances or change the host port in `docker-compose.yml` |
 | `filing not found` | External drive unmounted; path outside `EDGAR_DATA_DIR`; or Docker can't access `/Volumes` (enable in Docker Desktop → Settings → Resources → File sharing) |
-| Poor search results | Use the same `EMBEDDING_MODEL` for load and search; BGE-M3 uses a query prompt at search time |
 | Dimension mismatch on insert | Run `sql/002_bge_m3_1024.sql` and re-index filings |
 | Reprocess a filing | `edgar-etl process-event --json ... --force` |
 
