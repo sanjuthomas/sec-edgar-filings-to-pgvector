@@ -126,7 +126,7 @@ services:
       EMBEDDING_BATCH_SIZE: 16
       HF_HOME: /root/.cache/huggingface
     volumes:
-      # Filing .htm content is read from this host path (same as sec-edgar-filings).
+      # Filing .htm content is read from this host path (same as sec-edgar-filings-crawler).
       - ${EDGAR_HOST_PATH:-/Users/sanjuthomas/work/sec-edgar-local-test/edgar-filings}:${EDGAR_HOST_PATH:-/Users/sanjuthomas/work/sec-edgar-local-test/edgar-filings}:ro
       - ${HF_CACHE_HOST_PATH:-${PGSEARCH_HOST_PATH:-/Users/sanjuthomas/work/sec-edgar-local-test/pgsearch-data}}:/root/.cache/huggingface
       - ${LOCAL_DATA_ROOT:-/Users/sanjuthomas/work/sec-edgar-local-test}/config:/app/config

@@ -1,4 +1,4 @@
-"""Read filing metadata from MongoDB (sec-edgar-filings filing_metadata collection)."""
+"""Read filing metadata from MongoDB (sec-edgar-filings-crawler filing_metadata collection)."""
 
 from __future__ import annotations
 
