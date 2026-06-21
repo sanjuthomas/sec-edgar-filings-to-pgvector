@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SEC EDGAR ETL Admin</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f1419;
+      --surface: #1a2332;
+      --border: #2d3a4f;
+      --text: #e7ecf3;
+      --muted: #8b9cb3;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --error: #ef4444;
+      --radius: 10px;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f4f6f9;
+        --surface: #ffffff;
+        --border: #d8dee9;
+        --text: #1a2332;
+        --muted: #5c6b82;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 4rem;
+    }
+
+    h1 { margin: 0 0 0.5rem; font-size: 1.75rem; }
+    .subtitle { margin: 0 0 1.5rem; color: var(--muted); }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .card h2 {
+      margin: 0 0 0.75rem;
+      font-size: 1.1rem;
+    }
+
+    .card p {
+      margin: 0 0 1rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.85rem;
+      margin-bottom: 0.35rem;
+      color: var(--muted);
+    }
+
+    input, select {
+      width: 100%;
+      padding: 0.6rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+
+    .row {
+      display: flex;
+      gap: 0.75rem;
+      align-items: end;
+      flex-wrap: wrap;
+    }
+
+    .row > * { flex: 1; min-width: 140px; }
+    .checkbox-group {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-top: 0.2rem;
+    }
+    .checkbox-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.9rem;
+    }
+    .checkbox-item input {
+      width: auto;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
+    .row > button {
+      flex: 0 0 auto;
+      align-self: end;
+    }
+
+    button {
+      padding: 0.65rem 1rem;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    button:hover { background: var(--accent-hover); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    button.danger { background: var(--error); }
+    button.secondary { background: var(--border); color: var(--text); }
+
+    .stats, .services {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+
+    .stat, .service {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.65rem 0.9rem;
+      font-size: 0.9rem;
+    }
+
+    .stat strong, .service strong { display: block; font-size: 1.1rem; }
+
+    .service.ok { border-color: var(--success); }
+    .service.fail { border-color: var(--error); }
+
+    .status-line {
+      margin-top: 0.75rem;
+      font-size: 0.9rem;
+      min-height: 1.4rem;
+    }
+
+    .status-line.success { color: var(--success); }
+    .status-line.error { color: var(--error); }
+    .status-line.info { color: var(--muted); }
+
+    pre {
+      margin: 0.75rem 0 0;
+      padding: 0.75rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.8rem;
+      white-space: pre-wrap;
+    }
+
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+
+    .info-item {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+      font-size: 0.85rem;
+    }
+
+    .info-item strong {
+      display: block;
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-bottom: 0.2rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .status-pill {
+      display: inline-block;
+      padding: 0.1rem 0.45rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .status-pill.ok {
+      color: var(--success);
+      border: 1px solid color-mix(in srgb, var(--success) 40%, var(--border));
+    }
+
+    .status-pill.fail {
+      color: var(--error);
+      border: 1px solid color-mix(in srgb, var(--error) 40%, var(--border));
+    }
+
+    .schema-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      margin-top: 0.75rem;
+    }
+
+    .schema-table th,
+    .schema-table td {
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.6rem;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .schema-table th {
+      background: var(--bg);
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .relationship-list,
+    .pipeline-list {
+      margin: 0.75rem 0 0;
+      padding-left: 1.1rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .pipeline-list li + li {
+      margin-top: 0.65rem;
+    }
+
+    .pipeline-list strong {
+      color: var(--text);
+    }
+
+    code {
+      font-size: 0.85em;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>SEC EDGAR ETL Admin</h1>
+      <p class="subtitle">Manage vector DB data and Kafka consumption. ETL starts in standby until you start the consumer.</p>
+    </header>
+
+    <div class="stats" id="stats"></div>
+    <div class="services" id="services"></div>
+
+    <section class="card" id="embedding-info-card">
+      <h2>pgvector — embedding model &amp; schema</h2>
+      <p>
+        Text chunks are converted into dense vectors by the embedding model, then stored in
+        <code>public.filing_chunks.embedding</code>. Semantic search embeds your question with
+        the same backend and uses pgvector cosine distance. The active backend is shown below.
+      </p>
+      <div class="info-grid" id="embedding-info"></div>
+    </section>
+
+    <section class="card" id="paradedb-info-card">
+      <h2>pg_search — BM25 keyword search</h2>
+      <p>
+        ParadeDB bundles pgvector and the <code>pg_search</code> extension. Chunk text in
+        <code>public.filing_chunks</code> is indexed automatically by a BM25 index — no separate
+        ETL step. Keyword search uses <code>|||</code> / <code>&amp;&amp;&amp;</code> operators and
+        <code>pdb.score(id)</code> for relevance ranking.
+      </p>
+      <div class="info-grid" id="paradedb-info"></div>
+      <h3 style="margin: 1.25rem 0 0.5rem; font-size: 1rem;">Example query</h3>
+      <pre class="code-block" id="paradedb-example-query">—</pre>
+      <h3 style="margin: 1.25rem 0 0.5rem; font-size: 1rem;">Index definition</h3>
+      <pre class="code-block" id="paradedb-index-def">—</pre>
+      <h3 style="margin: 1.25rem 0 0.5rem; font-size: 1rem;">Truncate pg_search index</h3>
+      <p>
+        Clears all BM25-indexed documents by removing every row from
+        <code>filing_chunks</code>. This also removes pgvector embeddings because both indexes
+        share the same table. <code>filings</code> summary rows are left unchanged.
+      </p>
+      <div class="row">
+        <button type="button" class="danger" id="truncate-bm25-btn">Truncate BM25 index</button>
+      </div>
+      <div class="status-line" id="truncate-bm25-status"></div>
+    </section>
+
+    <section class="card" id="schema-info-card">
+      <h2>Database schema</h2>
+      <div id="schema-info"></div>
+      <h3 style="margin: 1rem 0 0.5rem; font-size: 1rem;">How the pieces connect</h3>
+      <ol class="pipeline-list" id="pipeline-info"></ol>
+    </section>
+
+    <section class="card">
+      <h2>Truncate data</h2>
+      <p>
+        Remove all rows from the selected table or index target. Truncating
+        <code>filings</code> also clears related chunks (pgvector + pg_search). Truncating
+        <code>pg_search_bm25</code> clears <code>filing_chunks</code> only.
+      </p>
+      <div class="row">
+        <div>
+          <label for="truncate-table">Target</label>
+          <select id="truncate-table">
+            <option value="filing_chunks">filing_chunks (pgvector embeddings)</option>
+            <option value="pg_search_bm25">pg_search_bm25 (BM25 keyword index data)</option>
+            <option value="filings">filings (and related chunks)</option>
+          </select>
+        </div>
+        <button type="button" class="danger" id="truncate-btn">Truncate</button>
+      </div>
+      <div class="status-line" id="truncate-status"></div>
+    </section>
+
+    <section class="card">
+      <h2>Load ticker</h2>
+      <p>Fetch filings for a ticker from MongoDB, read local .htm files, chunk, embed, and store in Postgres (pgvector + ParadeDB BM25).</p>
+      <div class="row">
+        <div>
+          <label for="ticker">Ticker</label>
+          <input type="text" id="ticker" placeholder="e.g. KKR">
+        </div>
+        <div>
+          <label for="load-embedding-backend">Embedding backend</label>
+          <select id="load-embedding-backend">
+            <option value="">Select backend…</option>
+            <option value="embedded">Embedded — BGE-M3</option>
+            <option value="ollama">Ollama — BGE-M3</option>
+          </select>
+        </div>
+        <button type="button" id="load-ticker-btn">Load ticker</button>
+      </div>
+      <div>
+        <label>Filing forms</label>
+        <div class="checkbox-group">
+          <label class="checkbox-item"><input type="checkbox" class="form-checkbox" value="10-Q" checked>10-Q</label>
+          <label class="checkbox-item"><input type="checkbox" class="form-checkbox" value="10-K" checked>10-K</label>
+          <label class="checkbox-item"><input type="checkbox" class="form-checkbox" value="8-K" checked>8-K</label>
+        </div>
+      </div>
+      <div class="status-line" id="load-status"></div>
+      <pre id="load-details" hidden></pre>
+    </section>
+
+    <section class="card">
+      <h2>Kafka consumption</h2>
+      <p>Start consuming from the configured topic. Choose where to begin reading offsets.</p>
+      <div class="row">
+        <div>
+          <label for="offset-mode">Offset</label>
+          <select id="offset-mode">
+            <option value="committed">Committed offset (resume)</option>
+            <option value="earliest">Earliest</option>
+            <option value="latest">Latest</option>
+          </select>
+        </div>
+        <button type="button" id="kafka-start-btn">Start consumption</button>
+        <button type="button" class="secondary" id="kafka-stop-btn">Stop</button>
+      </div>
+      <div class="status-line" id="kafka-status"></div>
+    </section>
+  </div>
+
+  <script>
+    const statsEl = document.getElementById("stats");
+    const servicesEl = document.getElementById("services");
+    const embeddingInfoEl = document.getElementById("embedding-info");
+    const paradedbInfoEl = document.getElementById("paradedb-info");
+    const paradedbExampleEl = document.getElementById("paradedb-example-query");
+    const paradedbIndexDefEl = document.getElementById("paradedb-index-def");
+    const schemaInfoEl = document.getElementById("schema-info");
+    const pipelineInfoEl = document.getElementById("pipeline-info");
+
+    function setStatus(el, message, type = "info") {
+      el.textContent = message;
+      el.className = `status-line ${type}`;
+    }
+
+    async function refreshStatus() {
+      try {
+        const res = await fetch("/api/admin/status");
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+
+        statsEl.innerHTML = `
+          <div class="stat"><strong>${data.filing_count.toLocaleString()}</strong>Filings</div>
+          <div class="stat"><strong>${data.chunk_count.toLocaleString()}</strong>pgvector chunks</div>
+          <div class="stat"><strong>${data.bm25_indexed_chunks.toLocaleString()}</strong>BM25 chunks</div>
+          <div class="stat"><strong>${data.bm25_ready ? "ready" : "missing"}</strong>BM25 index</div>
+          <div class="stat"><strong>${data.kafka.state}</strong>Kafka consumer</div>
+        `;
+
+        servicesEl.innerHTML = data.services.map(s => `
+          <div class="service ${s.ok ? "ok" : "fail"}">
+            <strong>${s.name}</strong>
+            ${s.ok ? "OK" : "FAIL"} — ${escapeHtml(s.detail)}
+          </div>
+        `).join("");
+
+        renderEmbeddingInfo(data.embedding);
+        renderParadeDbInfo(data.paradedb);
+        renderSchemaInfo(data.db_schema);
+        renderPipelineInfo(data.pipeline);
+
+        setStatus(
+          document.getElementById("kafka-status"),
+          `Topic ${data.kafka.topic} · group ${data.kafka.group_id} · mode ${data.kafka.offset_mode || "—"} · state ${data.kafka.state}${data.kafka.last_error ? " · error: " + data.kafka.last_error : ""}`,
+          data.kafka.state === "running" ? "success" : "info"
+        );
+      } catch (err) {
+        servicesEl.innerHTML = `<div class="service fail"><strong>status</strong>${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function renderParadeDbInfo(paradedb) {
+      const extStatus = paradedb.extension_installed
+        ? `<span class="status-pill ok">installed${paradedb.extension_version ? ` v${escapeHtml(paradedb.extension_version)}` : ""}</span>`
+        : `<span class="status-pill fail">missing</span>`;
+      const indexStatus = paradedb.index_exists
+        ? `<span class="status-pill ok">present</span>`
+        : `<span class="status-pill fail">missing</span>`;
+
+      const items = [
+        ["Engine", paradedb.engine],
+        ["Extension", `${paradedb.extension} ${extStatus}`],
+        ["Docker image", paradedb.docker_image],
+        ["Table", paradedb.table],
+        ["BM25 index", `${paradedb.index_name} (${paradedb.index_type}) ${indexStatus}`],
+        ["Key field", paradedb.key_field],
+        ["Indexed columns", paradedb.indexed_columns.join(", ")],
+        ["Indexed chunks", paradedb.indexed_chunks.toLocaleString()],
+        ["Rank function", paradedb.rank_function],
+        ["Query operators", paradedb.query_operator],
+      ];
+      paradedbInfoEl.innerHTML = items.map(([label, value]) => `
+        <div class="info-item">
+          <strong>${escapeHtml(label)}</strong>
+          ${typeof value === "string" && value.includes("<span") ? value : escapeHtml(String(value))}
+        </div>
+      `).join("");
+
+      paradedbExampleEl.textContent = paradedb.example_query || "—";
+      paradedbIndexDefEl.textContent = paradedb.index_definition || "BM25 index not created yet (run init-db or sql/003_paradedb_pgsearch.sql).";
+    }
+
+    function renderEmbeddingInfo(embedding) {
+      const items = [
+        ["Active backend", embedding.backend_label],
+        ["Model", embedding.model],
+        ["Library", embedding.library],
+        ["Device", embedding.device],
+        ["Vector size", `${embedding.dimensions} dimensions`],
+        ["Max tokens", embedding.max_seq_length],
+        ["Batch size", embedding.batch_size],
+        ["Similarity", `${embedding.similarity} (<=> in pgvector)`],
+        ["Query prompt", embedding.query_prompt || "none"],
+      ];
+      if (embedding.ollama_base_url) {
+        items.splice(4, 0, ["Ollama URL", embedding.ollama_base_url]);
+      }
+      embeddingInfoEl.innerHTML = items.map(([label, value]) => `
+        <div class="info-item">
+          <strong>${escapeHtml(label)}</strong>
+          ${escapeHtml(String(value))}
+        </div>
+      `).join("");
+    }
+
+    function renderSchemaInfo(schema) {
+      schemaInfoEl.innerHTML = schema.map((table) => `
+        <h3 style="margin: 1rem 0 0.35rem; font-size: 1rem;">${escapeHtml(table.name)}</h3>
+        <table class="schema-table">
+          <thead>
+            <tr>
+              <th>Column</th>
+              <th>Type</th>
+              <th>Nullable</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${table.columns.map((column) => `
+              <tr>
+                <td><code>${escapeHtml(column.name)}</code></td>
+                <td><code>${escapeHtml(column.type)}</code></td>
+                <td>${column.nullable ? "yes" : "no"}</td>
+                <td>${escapeHtml(column.notes || "")}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+        ${table.relationships.length ? `
+          <ul class="relationship-list">
+            ${table.relationships.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+          </ul>
+        ` : ""}
+      `).join("");
+    }
+
+    function renderPipelineInfo(pipeline) {
+      pipelineInfoEl.innerHTML = pipeline.map((step) => `
+        <li><strong>${escapeHtml(step.title)}</strong> — ${escapeHtml(step.description)}</li>
+      `).join("");
+    }
+
+    async function truncateTarget(table, statusEl) {
+      const label = table === "pg_search_bm25" ? "pg_search BM25 index data" : `table "${table}"`;
+      if (!confirm(`Truncate ${label}? This cannot be undone.`)) return;
+
+      setStatus(statusEl, "Truncating…", "info");
+      try {
+        const res = await fetch("/api/admin/truncate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ table }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || res.statusText);
+        setStatus(statusEl, data.message, "success");
+        refreshStatus();
+      } catch (err) {
+        setStatus(statusEl, err.message, "error");
+      }
+    }
+
+    document.getElementById("truncate-btn").addEventListener("click", async () => {
+      const table = document.getElementById("truncate-table").value;
+      await truncateTarget(table, document.getElementById("truncate-status"));
+    });
+
+    document.getElementById("truncate-bm25-btn").addEventListener("click", async () => {
+      await truncateTarget("pg_search_bm25", document.getElementById("truncate-bm25-status"));
+    });
+
+    document.getElementById("load-ticker-btn").addEventListener("click", async () => {
+      const ticker = document.getElementById("ticker").value.trim();
+      const backend = document.getElementById("load-embedding-backend").value;
+      const selectedForms = Array.from(document.querySelectorAll(".form-checkbox:checked"))
+        .map((el) => el.value);
+      const statusEl = document.getElementById("load-status");
+      const detailsEl = document.getElementById("load-details");
+      if (!ticker) {
+        setStatus(statusEl, "Enter a ticker.", "error");
+        return;
+      }
+      if (!backend) {
+        setStatus(statusEl, "Select an embedding backend.", "error");
+        return;
+      }
+      if (!selectedForms.length) {
+        setStatus(statusEl, "Select at least one filing form.", "error");
+        return;
+      }
+
+      setStatus(statusEl, `Loading ${ticker.toUpperCase()} with ${backend}… this may take a while.`, "info");
+      detailsEl.hidden = true;
+      document.getElementById("load-ticker-btn").disabled = true;
+
+      try {
+        const res = await fetch("/api/admin/load-ticker", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticker, forms: selectedForms, backend }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || res.statusText);
+        setStatus(
+          statusEl,
+          `${data.ticker}: found ${data.found}, processed ${data.processed}, skipped ${data.skipped}, failed ${data.failed}, ${data.total_chunks} chunks`,
+          data.failed ? "error" : "success"
+        );
+        if (data.errors?.length) {
+          detailsEl.hidden = false;
+          detailsEl.textContent = data.errors.join("\n");
+        }
+        refreshStatus();
+      } catch (err) {
+        setStatus(statusEl, err.message, "error");
+      } finally {
+        document.getElementById("load-ticker-btn").disabled = false;
+      }
+    });
+
+    document.getElementById("kafka-start-btn").addEventListener("click", async () => {
+      const offset = document.getElementById("offset-mode").value;
+      const statusEl = document.getElementById("kafka-status");
+      setStatus(statusEl, "Starting consumer…", "info");
+      try {
+        const res = await fetch("/api/admin/kafka/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ offset }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || res.statusText);
+        setStatus(statusEl, `Consumer ${data.state} (offset: ${data.offset_mode})`, "success");
+        refreshStatus();
+      } catch (err) {
+        setStatus(statusEl, err.message, "error");
+      }
+    });
+
+    document.getElementById("kafka-stop-btn").addEventListener("click", async () => {
+      const statusEl = document.getElementById("kafka-status");
+      setStatus(statusEl, "Stopping consumer…", "info");
+      try {
+        const res = await fetch("/api/admin/kafka/stop", { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || res.statusText);
+        setStatus(statusEl, `Consumer ${data.state}`, "info");
+        refreshStatus();
+      } catch (err) {
+        setStatus(statusEl, err.message, "error");
+      }
+    });
+
+    refreshStatus();
+    setInterval(refreshStatus, 10000);
+  </script>
+</body>
+</html>

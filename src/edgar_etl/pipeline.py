@@ -4,7 +4,7 @@ import logging
 import structlog
 
 from edgar_etl.config import Settings
-from edgar_etl.embed import embed_texts
+from edgar_etl.embed import embed_texts, query_prompt_name
 from edgar_etl.errors import FilingNotIndexableError, NonContentProcessingError
 from edgar_etl.extract import (
     chunk_text,
@@ -106,6 +106,9 @@ def process_filing_event(
             [chunk.content for chunk in chunks],
             model_name=settings.embedding_model,
             batch_size=settings.embedding_batch_size,
+            device=settings.embedding_device,
+            max_seq_length=settings.embedding_max_seq_length,
+            settings=settings,
         )
         count = filing_store.upsert_filing(event, chunks, embeddings)
     except Exception as exc:

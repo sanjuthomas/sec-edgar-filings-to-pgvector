@@ -1,5 +1,7 @@
+from typing import Annotated
+
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -11,7 +13,7 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql://postgres:postgres@localhost:5433/edgar"
     edgar_data_dir: str = "/Volumes/Transcend/edgar"
-    allowed_forms: list[str] = Field(
+    allowed_forms: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["10-K", "10-Q", "10-K/A", "10-Q/A"]
     )
     mongo_uri: str = "mongodb://mongo:27017"
@@ -24,6 +26,12 @@ class Settings(BaseSettings):
     kafka_auto_offset_reset: str = "earliest"
     kafka_session_timeout_ms: int = 180_000
     embedding_model: str = "BAAI/bge-m3"
+    embedding_backend: str = "embedded"
+    embedding_config_path: str = ""
+    ollama_base_url: str = "http://host.docker.internal:11434"
+    ollama_embedding_model: str = "bge-m3"
+    embedding_device: str = "cpu"
+    embedding_max_seq_length: int = 512
     embedding_batch_size: int = 16
     chunk_size: int = 1000
     chunk_overlap: int = 150

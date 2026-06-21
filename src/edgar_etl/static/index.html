@@ -141,7 +141,8 @@
     }
 
     input[type="number"],
-    input[type="text"] {
+    input[type="text"],
+    select {
       width: 100%;
       padding: 0.6rem 0.75rem;
       border: 1px solid var(--border);
@@ -272,6 +273,13 @@
 
       <div class="row">
         <div>
+          <label for="mode">Search mode</label>
+          <select id="mode" name="mode">
+            <option value="semantic" selected>Semantic (pgvector)</option>
+            <option value="keyword">Keyword (ParadeDB BM25)</option>
+          </select>
+        </div>
+        <div>
           <label for="top-k">Number of chunks</label>
           <input type="number" id="top-k" name="top-k" value="10" min="1" max="100">
         </div>
@@ -340,14 +348,17 @@
           : "";
         const company = meta.company_name ? escapeHtml(meta.company_name) : "";
         const filingDate = meta.filing_date ? escapeHtml(String(meta.filing_date)) : "";
+        const similarityBadge = r.similarity != null
+          ? `<span class="badge similarity">${(r.similarity * 100).toFixed(1)}% similar</span>
+             <span class="badge">distance ${r.distance.toFixed(4)}</span>`
+          : `<span class="badge similarity">BM25 rank ${Number(r.rank).toFixed(4)}</span>`;
 
         return `
           <article class="result">
             <div class="result-header">
               <span class="result-rank">#${i + 1}</span>
               <span class="badge">${escapeHtml(ticker)} ${escapeHtml(formType)}</span>
-              <span class="badge similarity">${(r.similarity * 100).toFixed(1)}% similar</span>
-              <span class="badge">distance ${r.distance.toFixed(4)}</span>
+              ${similarityBadge}
             </div>
             <div class="result-meta">
               ${company ? `<span>${company}</span> · ` : ""}
@@ -375,10 +386,13 @@
 
       submitBtn.disabled = true;
       statusEl.className = "";
-      statusEl.textContent = "Searching… (first query may take a moment while the embedding model loads)";
+      statusEl.textContent = mode === "keyword"
+        ? "Searching with ParadeDB BM25…"
+        : "Searching… (first query may take a moment while the embedding model loads)";
       resultsEl.innerHTML = "";
 
-      const params = new URLSearchParams({ q: query, top_k: topK });
+      const mode = document.getElementById("mode").value;
+      const params = new URLSearchParams({ q: query, top_k: topK, mode });
       if (ticker) params.set("ticker", ticker);
       if (formType) params.set("form", formType);
 

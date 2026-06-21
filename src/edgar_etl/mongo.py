@@ -27,6 +27,17 @@ class MongoFilingStore:
             {"_id": 0},
         )
 
+    def list_filings_by_ticker(
+        self,
+        ticker: str,
+        *,
+        allowed_forms: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        query: dict[str, Any] = {"ticker": ticker.upper()}
+        if allowed_forms:
+            query["form"] = {"$in": [form.upper() for form in allowed_forms]}
+        return list(self._collection.find(query, {"_id": 0}))
+
     def close(self) -> None:
         self._client.close()
 

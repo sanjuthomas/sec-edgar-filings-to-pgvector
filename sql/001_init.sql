@@ -1,4 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_search;
 
 CREATE TABLE IF NOT EXISTS filings (
     accession_number TEXT PRIMARY KEY,
@@ -31,3 +32,8 @@ CREATE INDEX IF NOT EXISTS idx_filing_chunks_metadata ON filing_chunks USING gin
 -- HNSW index for cosine similarity search (used by future Q&A project)
 CREATE INDEX IF NOT EXISTS idx_filing_chunks_embedding
     ON filing_chunks USING hnsw (embedding vector_cosine_ops);
+
+-- ParadeDB BM25 full-text index (pg_search); updated automatically on INSERT/DELETE.
+CREATE INDEX IF NOT EXISTS idx_filing_chunks_bm25 ON filing_chunks
+USING bm25 (id, content, metadata, accession_number, chunk_index)
+WITH (key_field = 'id');

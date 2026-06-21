@@ -1,17 +1,23 @@
-# Consumer stack for sec-edgar-filings.
+# Consumer stack for sec-edgar-filings-crawler.
 #
-# This compose file runs ONLY pgvector, edgar-pgvector-etl, and edgar-pgvector-search.
-# MongoDB and Kafka are owned by sec-edgar-filings:
-#   https://github.com/sanjuthomas/sec-edgar-filings
+# This compose file runs ParadeDB (pgvector + pg_search), pgvector-browser, and edgar-pgvector-etl.
+# MongoDB and Kafka run in sec-edgar-filings-crawler (shared Docker network):
+#   ../sec-edgar-filings-crawler
 #
-# Start the producer stack first, then this one:
-#   cd sec-edgar-filings && docker compose up -d
+# Local data root (override in .env):
+#   LOCAL_DATA_ROOT=/Users/sanjuthomas/work/sec-edgar-local-test
+#   pgvector-data, postgres-data, mongo-data, pgsearch-data, edgar-filings
+#
+# Start the crawler stack first, then this one:
+#   cd sec-edgar-filings-crawler && docker compose up -d --build
 #   cd sec-edgar-filings-to-pgvector && docker compose up -d --build
 
 services:
   pgvector:
-    image: pgvector/pgvector:pg17
+    image: paradedb/paradedb:latest-pg17
     container_name: edgar-pgvector
+    entrypoint: ["/bin/bash", "/pgvector-entrypoint.sh"]
+    command: ["postgres"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -19,7 +25,10 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - /Volumes/Transcend/pgvector-data:/var/lib/postgresql/data
+      - ${PGVECTOR_HOST_PATH:-/Users/sanjuthomas/work/sec-edgar-local-test/pgvector-data}:/var/lib/postgresql/data
+      - ./scripts/pgvector-entrypoint.sh:/pgvector-entrypoint.sh:ro
+      # Runs once on first boot when the data directory is empty.
+      - ./sql/001_init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
     restart: unless-stopped
     networks:
       - sec-edgar
@@ -29,17 +38,53 @@ services:
       timeout: 5s
       retries: 5
 
-  edgar-pgvector-search:
-    build: .
-    container_name: edgar-pgvector-search
+  # Idempotent schema + pg_search BM25 migration on every compose up.
+  pgvector-init:
+    image: paradedb/paradedb:latest-pg17
+    container_name: edgar-pgvector-init
     depends_on:
       pgvector:
         condition: service_healthy
     environment:
+      PGHOST: pgvector
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: edgar
+    volumes:
+      - ./sql:/sql:ro
+      - ./scripts/pgvector-init.sh:/pgvector-init.sh:ro
+    entrypoint: ["/bin/sh", "/pgvector-init.sh"]
+    networks:
+      - sec-edgar
+    restart: "no"
+
+  pgvector-browser:
+    build: .
+    image: sec-edgar-filings-to-pgvector:latest
+    container_name: edgar-pgvector-browser
+    cpus: 2
+    mem_limit: 8g
+    memswap_limit: 8g
+    depends_on:
+      pgvector:
+        condition: service_healthy
+      pgvector-init:
+        condition: service_completed_successfully
+    environment:
       DATABASE_URL: postgresql://postgres:postgres@pgvector:5432/edgar
       EMBEDDING_MODEL: BAAI/bge-m3
+      EMBEDDING_BACKEND: embedded
+      EMBEDDING_CONFIG_PATH: /app/config/embedding-backend.json
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_EMBEDDING_MODEL: bge-m3
+      EMBEDDING_DEVICE: cpu
+      EMBEDDING_MAX_SEQ_LENGTH: 512
       EMBEDDING_BATCH_SIZE: 16
+      HF_HOME: /root/.cache/huggingface
       LOG_LEVEL: INFO
+    volumes:
+      - ${HF_CACHE_HOST_PATH:-${PGSEARCH_HOST_PATH:-/Users/sanjuthomas/work/sec-edgar-local-test/pgsearch-data}}:/root/.cache/huggingface
+      - ${LOCAL_DATA_ROOT:-/Users/sanjuthomas/work/sec-edgar-local-test}/config:/app/config
     ports:
       - "8000:8000"
     command: ["edgar-etl", "serve", "--host", "0.0.0.0", "--port", "8000"]
@@ -49,15 +94,21 @@ services:
 
   edgar-pgvector-etl:
     build: .
+    image: sec-edgar-filings-to-pgvector:latest
     container_name: edgar-pgvector-etl
+    cpus: 4
+    mem_limit: 32g
+    memswap_limit: 32g
     depends_on:
       pgvector:
         condition: service_healthy
+      pgvector-init:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql://postgres:postgres@pgvector:5432/edgar
-      EDGAR_DATA_DIR: ${EDGAR_HOST_PATH:-/Volumes/Transcend/edgar}
-      ALLOWED_FORMS: 10-K,10-Q,10-K/A,10-Q/A
-      # Read-only clients — MongoDB/Kafka run in sec-edgar-filings compose.
+      EDGAR_DATA_DIR: ${EDGAR_HOST_PATH:-/Users/sanjuthomas/work/sec-edgar-local-test/edgar-filings}
+      ALLOWED_FORMS: 10-K,10-Q,10-K/A,10-Q/A,8-K,8-K/A
+      # MongoDB/Kafka hostnames resolve on shared network sec-edgar_default.
       MONGO_URI: mongodb://mongo:27017
       MONGO_DB: sec_edgar_filings
       MONGO_FILING_METADATA_COLLECTION: filing_metadata
@@ -66,10 +117,22 @@ services:
       KAFKA_GROUP_ID: edgar-pgvector-etl
       KAFKA_AUTO_OFFSET_RESET: earliest
       EMBEDDING_MODEL: BAAI/bge-m3
+      EMBEDDING_BACKEND: embedded
+      EMBEDDING_CONFIG_PATH: /app/config/embedding-backend.json
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_EMBEDDING_MODEL: bge-m3
+      EMBEDDING_DEVICE: cpu
+      EMBEDDING_MAX_SEQ_LENGTH: 512
       EMBEDDING_BATCH_SIZE: 16
+      HF_HOME: /root/.cache/huggingface
     volumes:
       # Filing .htm content is read from this host path (same as sec-edgar-filings).
-      - ${EDGAR_HOST_PATH:-/Volumes/Transcend/edgar}:${EDGAR_HOST_PATH:-/Volumes/Transcend/edgar}:ro
+      - ${EDGAR_HOST_PATH:-/Users/sanjuthomas/work/sec-edgar-local-test/edgar-filings}:${EDGAR_HOST_PATH:-/Users/sanjuthomas/work/sec-edgar-local-test/edgar-filings}:ro
+      - ${HF_CACHE_HOST_PATH:-${PGSEARCH_HOST_PATH:-/Users/sanjuthomas/work/sec-edgar-local-test/pgsearch-data}}:/root/.cache/huggingface
+      - ${LOCAL_DATA_ROOT:-/Users/sanjuthomas/work/sec-edgar-local-test}/config:/app/config
+    ports:
+      - "8001:8001"
+    command: ["edgar-etl", "standby", "--host", "0.0.0.0", "--port", "8001"]
     restart: unless-stopped
     networks:
       - sec-edgar
@@ -77,4 +140,4 @@ services:
 networks:
   sec-edgar:
     external: true
-    name: ${SEC_EDGAR_DOCKER_NETWORK:-sec-edgar-filings_default}
+    name: ${SEC_EDGAR_DOCKER_NETWORK:-sec-edgar_default}

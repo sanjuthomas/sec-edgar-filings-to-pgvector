@@ -2,92 +2,45 @@ import signal
 import sys
 
 import structlog
-from confluent_kafka import Consumer, KafkaError, KafkaException
 
 from edgar_etl.config import Settings
-from edgar_etl.errors import FilingNotIndexableError, NonContentProcessingError
-from edgar_etl.mongo import MongoFilingStore, enrich_event_from_mongo
-from edgar_etl.pipeline import configure_logging, parse_event, process_filing_event
-from edgar_etl.store import FilingStore
+from edgar_etl.kafka_manager import KafkaConsumerManager, OffsetMode
+from edgar_etl.pipeline import configure_logging
 
 logger = structlog.get_logger(__name__)
 
-_running = True
 
-
-def _shutdown_handler(signum: int, frame: object) -> None:
-    global _running
-    logger.info("shutdown signal received", signal=signum)
-    _running = False
-
-
-def run_consumer(settings: Settings | None = None) -> None:
+def run_consumer(
+    settings: Settings | None = None,
+    *,
+    offset_mode: OffsetMode | None = None,
+) -> None:
     settings = settings or Settings()
     configure_logging(settings.log_level)
 
-    consumer = Consumer(
-        {
-            "bootstrap.servers": settings.kafka_bootstrap_servers,
-            "group.id": settings.kafka_group_id,
-            "auto.offset.reset": settings.kafka_auto_offset_reset,
-            "session.timeout.ms": settings.kafka_session_timeout_ms,
-            "enable.auto.commit": False,
-        }
-    )
-    consumer.subscribe([settings.kafka_topic])
-    store = FilingStore(settings.database_url)
-    mongo_store = MongoFilingStore(settings) if settings.mongo_uri else None
+    mode: OffsetMode = offset_mode or settings.kafka_auto_offset_reset  # type: ignore[assignment]
+    if mode not in {"earliest", "latest", "committed"}:
+        mode = "earliest"
+
+    manager = KafkaConsumerManager(settings)
+    stop_requested = False
+
+    def _shutdown_handler(signum: int, frame: object) -> None:
+        nonlocal stop_requested
+        logger.info("shutdown signal received", signal=signum)
+        stop_requested = True
 
     signal.signal(signal.SIGINT, _shutdown_handler)
     signal.signal(signal.SIGTERM, _shutdown_handler)
 
-    logger.info(
-        "kafka consumer started",
-        topic=settings.kafka_topic,
-        group_id=settings.kafka_group_id,
-        bootstrap_servers=settings.kafka_bootstrap_servers,
-        session_timeout_ms=settings.kafka_session_timeout_ms,
-    )
-
+    manager.start(mode)
     try:
-        while _running:
-            message = consumer.poll(1.0)
-            if message is None:
-                continue
-            if message.error():
-                if message.error().code() == KafkaError._PARTITION_EOF:
-                    continue
-                raise KafkaException(message.error())
-
-            event = None
-            try:
-                event = parse_event(message.value())
-                if mongo_store is not None:
-                    event = enrich_event_from_mongo(event, mongo_store)
-                process_filing_event(event, settings, store=store)
-                consumer.commit(message=message, asynchronous=False)
-            except (FilingNotIndexableError, NonContentProcessingError) as exc:
-                logger.warning(
-                    "skipping filing without indexing",
-                    error=str(exc),
-                    accession_number=getattr(event, "accession_number", None),
-                    topic=message.topic(),
-                    partition=message.partition(),
-                    offset=message.offset(),
-                )
-                consumer.commit(message=message, asynchronous=False)
-            except Exception:
-                logger.exception(
-                    "failed to process message",
-                    topic=message.topic(),
-                    partition=message.partition(),
-                    offset=message.offset(),
-                )
+        while not stop_requested and manager.is_running:
+            manager.wait_until_stopped(timeout=1.0)
+        if manager.last_error:
+            raise RuntimeError(manager.last_error)
     finally:
-        consumer.close()
-        if mongo_store is not None:
-            mongo_store.close()
-        logger.info("kafka consumer stopped")
+        manager.stop()
 
 
 def main() -> None:

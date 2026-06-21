@@ -61,7 +61,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Reprocess even if accession already exists",
     )
 
-    subparsers.add_parser("consume", help="Start Kafka consumer")
+    subparsers.add_parser("consume", help="Start Kafka consumer immediately")
+
+    standby_parser = subparsers.add_parser(
+        "standby",
+        help="Verify connectivity and serve the admin UI (default; Kafka idle)",
+    )
+    standby_parser.add_argument("--host", default="0.0.0.0", help="Bind address")
+    standby_parser.add_argument("--port", type=int, default=8001, help="Listen port")
 
     search_parser = subparsers.add_parser(
         "search",
@@ -135,6 +142,22 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "consume":
         run_consumer(settings)
+        return
+
+    if args.command == "standby":
+        import uvicorn
+
+        from edgar_etl.admin_api import create_admin_app
+        from edgar_etl.connectivity import check_all
+
+        for status in check_all(settings):
+            if status.ok:
+                print(f"[ok] {status.name}: {status.detail}")
+            else:
+                print(f"[fail] {status.name}: {status.detail}")
+
+        app = create_admin_app(settings)
+        uvicorn.run(app, host=args.host, port=args.port)
         return
 
     if args.command == "search":

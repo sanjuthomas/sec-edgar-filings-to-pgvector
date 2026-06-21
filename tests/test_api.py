@@ -23,14 +23,19 @@ def test_index_returns_html(client: TestClient) -> None:
     assert 'id="search-form"' in response.text
 
 
+@patch("edgar_etl.paradedb_search.is_bm25_ready", return_value=True)
 @patch("edgar_etl.api.psycopg.connect")
-def test_stats(mock_connect, client: TestClient) -> None:
+def test_stats(mock_connect, _mock_bm25, client: TestClient) -> None:
     mock_conn = mock_connect.return_value.__enter__.return_value
     mock_conn.execute.return_value.fetchone.side_effect = [(42,), (1000,)]
 
     response = client.get("/api/stats")
     assert response.status_code == 200
-    assert response.json() == {"filing_count": 42, "chunk_count": 1000}
+    assert response.json() == {
+        "filing_count": 42,
+        "chunk_count": 1000,
+        "bm25_ready": True,
+    }
 
 
 @patch("edgar_etl.api.search_filings")
@@ -49,6 +54,7 @@ def test_search_default_top_k(mock_search, client: TestClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["query"] == "revenue growth"
+    assert data["mode"] == "semantic"
     assert data["top_k"] == 10
     assert data["count"] == 1
     assert data["results"][0]["similarity"] == 0.69

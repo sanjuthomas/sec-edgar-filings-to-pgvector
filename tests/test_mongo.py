@@ -63,3 +63,24 @@ def test_enrich_event_falls_back_to_kafka_payload() -> None:
 
 def test_mongo_store_module_exports() -> None:
     assert MongoFilingStore is not None
+
+
+def test_list_filings_by_ticker_filters_forms() -> None:
+    class FakeCollection:
+        def __init__(self) -> None:
+            self.last_query = None
+
+        def find(self, query, projection):
+            self.last_query = query
+            return [{"accession_number": "0001"}]
+
+    store = MongoFilingStore.__new__(MongoFilingStore)
+    store._collection = FakeCollection()
+
+    results = store.list_filings_by_ticker("aapl", allowed_forms=["10-K", "10-Q"])
+
+    assert len(results) == 1
+    assert store._collection.last_query == {
+        "ticker": "AAPL",
+        "form": {"$in": ["10-K", "10-Q"]},
+    }

@@ -1,6 +1,6 @@
 # SEC EDGAR Filings → pgvector
 
-Transform and load SEC EDGAR filings into PostgreSQL with [pgvector](https://github.com/pgvector/pgvector) for semantic search.
+Transform and load SEC EDGAR filings into PostgreSQL with [ParadeDB](https://www.paradedb.com/) (pgvector + BM25 full-text search via `pg_search`).
 
 This service listens to Kafka for `filing.downloaded` events, looks up filing metadata in MongoDB, then **reads the actual `.htm` files from the local filesystem** at `/Volumes/Transcend/edgar` (it does not download from SEC). It extracts text from inline XBRL HTML, generates embeddings, and stores them in pgvector.
 
@@ -94,7 +94,7 @@ flowchart LR
     Disk -->|read .htm| ETL
 ```
 
-Both stacks join the same Docker network (`sec-edgar-filings_default` by default) so `edgar-pgvector-etl` can reach `mongo` and `kafka` by service name.
+Both stacks join the same Docker network (`sec-edgar_default` by default) so `edgar-pgvector-etl` can reach `mongo` and `kafka` by service name.
 
 ## Prerequisites
 
@@ -139,9 +139,9 @@ open http://localhost:8000          # search UI (filing/chunk counts + semantic 
 |---------|---------|-----------|---------|
 | MongoDB | sec-edgar-filings | `mongo` | Filing metadata (producer writes, ETL reads) |
 | Kafka | sec-edgar-filings | `kafka` | `filing.downloaded` events (producer publishes, ETL consumes) |
-| pgvector | **this repo** | `edgar-pgvector` | Vector store for embeddings |
+| pgvector | **this repo** | `edgar-pgvector` | ParadeDB Postgres (pgvector + BM25 `pg_search`) |
 | ETL consumer | **this repo** | `edgar-pgvector-etl` | Kafka → MongoDB → embed → pgvector |
-| Search UI | **this repo** | `edgar-pgvector-search` | Web UI + API for semantic search over pgvector |
+| Search UI | **this repo** | `pgvector-browser` (`edgar-pgvector-browser`) | Web UI + API for semantic search over pgvector |
 
 **Host access to pgvector** (for `psql`, TablePlus, etc.):
 
@@ -206,7 +206,7 @@ Copy `.env.example` to `.env`:
 
 ```env
 # Network created by sec-edgar-filings docker compose
-SEC_EDGAR_DOCKER_NETWORK=sec-edgar-filings_default
+SEC_EDGAR_DOCKER_NETWORK=sec-edgar_default
 
 DATABASE_URL=postgresql://postgres:postgres@localhost:5433/edgar
 
@@ -234,7 +234,7 @@ LOG_LEVEL=INFO
 
 | Variable | Description |
 |----------|-------------|
-| `SEC_EDGAR_DOCKER_NETWORK` | Docker network from sec-edgar-filings compose (default: `sec-edgar-filings_default`) |
+| `SEC_EDGAR_DOCKER_NETWORK` | Shared Docker network from sec-edgar-filings-crawler compose (default: `sec-edgar_default`) |
 | `DATABASE_URL` | PostgreSQL connection string (this project's pgvector) |
 | `EDGAR_DATA_DIR` | Root directory for `.htm` filing files on disk (default: `/Volumes/Transcend/edgar`) |
 | `EDGAR_HOST_PATH` | Host bind-mount path for Docker (Compose only; defaults to `EDGAR_DATA_DIR`) |
@@ -384,7 +384,7 @@ edgar-etl serve
 # open http://127.0.0.1:8000
 ```
 
-With Docker Compose, the `edgar-pgvector-search` service is available at [http://localhost:8000](http://localhost:8000). The page shows filing/chunk counts (to verify data landed in pgvector) and a search form. By default it returns the **top 10** most similar chunks; you can change the number in the UI or via the API.
+With Docker Compose, the `pgvector-browser` service is available at [http://localhost:8000](http://localhost:8000). The page shows filing/chunk counts (to verify data landed in pgvector) and a search form. By default it returns the **top 10** most similar chunks; you can change the number in the UI or via the API.
 
 | Endpoint | Description |
 |----------|-------------|
@@ -415,7 +415,7 @@ edgar-etl search "executive compensation approval"
 sec-edgar-filings-to-pgvector/
 ├── pyproject.toml
 ├── Dockerfile                 # ETL consumer image
-├── docker-compose.yml         # pgvector + edgar-pgvector-etl + edgar-pgvector-search
+├── docker-compose.yml         # pgvector + pgvector-browser + edgar-pgvector-etl
 ├── .env.example
 ├── sql/
 │   ├── 001_init.sql           # Database schema (1024-dim vectors)
@@ -458,7 +458,7 @@ Extraction tests use the sample 8-K at `/Volumes/Transcend/edgar/AEE/...` if the
 
 | Problem | Fix |
 |---------|-----|
-| `network sec-edgar-filings_default not found` | Start [sec-edgar-filings](https://github.com/sanjuthomas/sec-edgar-filings) first: `docker compose up -d` |
+| `network sec-edgar_default not found` | Start sec-edgar-filings-crawler first: `cd sec-edgar-filings-crawler && docker compose up -d` |
 | ETL can't reach Kafka/MongoDB | Confirm sec-edgar-filings is running; check `SEC_EDGAR_DOCKER_NETWORK` matches `docker network ls` |
 | `connection refused` on `psql` | Run `docker compose up -d` here and check `docker compose ps` |
 | Container won't start (permissions) | Ensure `/Volumes/Transcend/pgvector-data` exists and is writable |

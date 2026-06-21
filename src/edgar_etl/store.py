@@ -8,6 +8,9 @@ from pgvector.psycopg import register_vector
 from edgar_etl.models import FilingDownloadedEvent, TextChunk
 
 
+TRUNCATABLE_TABLES = frozenset({"filings", "filing_chunks"})
+
+
 class FilingStore:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
@@ -21,6 +24,14 @@ class FilingStore:
         sql = Path(schema_path).read_text(encoding="utf-8")
         with self.connect() as conn:
             conn.execute(sql)
+            conn.commit()
+
+    def truncate_table(self, table: str) -> None:
+        if table not in TRUNCATABLE_TABLES:
+            raise ValueError(f"unsupported table: {table}")
+        cascade = " CASCADE" if table == "filings" else ""
+        with self.connect() as conn:
+            conn.execute(f"TRUNCATE TABLE {table}{cascade}")
             conn.commit()
 
     def is_processed(self, accession_number: str) -> bool:
